@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image Retrieval System</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="static/style.css" rel="stylesheet">
+</head>
+<body>
+    <div class="container-fluid">
+        <!-- Header -->
+        <header class="row bg-primary text-white py-3">
+            <div class="col">
+                <h1 class="h3 mb-0">
+                    <i class="fas fa-search me-2"></i>
+                    Image Retrieval System
+                </h1>
+                <p class="mb-0">Search images using text descriptions or image similarity</p>
+            </div>
+        </header>
+
+        <!-- Search Controls -->
+        <div class="row py-4 bg-light">
+            <div class="col-md-8 mx-auto">
+                <!-- Search Tabs -->
+                <ul class="nav nav-tabs mb-3" id="searchTabs">
+                    <li class="nav-item">
+                        <button class="nav-link active" id="text-tab" data-bs-toggle="tab" data-bs-target="#text-search">
+                            <i class="fas fa-font me-2"></i>Text Search
+                        </button>
+                    </li>
+                    <li class="nav-item">
+                        <button class="nav-link" id="image-tab" data-bs-toggle="tab" data-bs-target="#image-search">
+                            <i class="fas fa-image me-2"></i>Image Search
+                        </button>
+                    </li>
+                </ul>
+
+                <!-- Search Content -->
+                <div class="tab-content" id="searchTabContent">
+                    <!-- Text Search -->
+                    <div class="tab-pane fade show active" id="text-search">
+                        <div class="row g-3">
+                            <div class="col-md-6">
+                                <label class="form-label">Text Query:</label>
+                                <input type="text" id="textQuery" class="form-control" 
+                                       placeholder="Describe what you're looking for...">
+                            </div>
+                            <div class="col-md-2">
+                                <label class="form-label">Top K:</label>
+                                <select id="textTopK" class="form-select">
+                                    <option value="5">5 results</option>
+                                    <option value="10" selected>10 results</option>
+                                    <option value="20">20 results</option>
+                                    <option value="50">50 results</option>
+                                </select>
+                            </div>
+                            <div class="col-md-2">
+                                <label class="form-label">Video Filter:</label>
+                                <input type="text" id="textVideoFilter" class="form-control" 
+                                       placeholder="Video ID (optional)">
+                            </div>
+                            <div class="col-md-2">
+                                <label class="form-label">&nbsp;</label>
+                                <button onclick="searchByText()" class="btn btn-primary w-100">
+                                    <i class="fas fa-search me-1"></i>Search
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Image Search -->
+                    <div class="tab-pane fade" id="image-search">
+                        <div class="row g-3">
+                            <div class="col-md-6">
+                                <label class="form-label">Upload Image:</label>
+                                <input type="file" id="imageFile" class="form-control" accept="image/*">
+                                <div id="imagePreview" class="mt-2"></div>
+                            </div>
+                            <div class="col-md-2">
+                                <label class="form-label">Top K:</label>
+                                <select id="imageTopK" class="form-select">
+                                    <option value="5">5 results</option>
+                                    <option value="10" selected>10 results</option>
+                                    <option value="20">20 results</option>
+                                    <option value="50">50 results</option>
+                                </select>
+                            </div>
+                            <div class="col-md-2">
+                                <label class="form-label">Video Filter:</label>
+                                <input type="text" id="imageVideoFilter" class="form-control" 
+                                       placeholder="Video ID (optional)">
+                            </div>
+                            <div class="col-md-2">
+                                <label class="form-label">&nbsp;</label>
+                                <button onclick="searchByImage()" class="btn btn-primary w-100">
+                                    <i class="fas fa-search me-1"></i>Search
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Loading -->
+        <div id="loading" class="text-center py-4" style="display: none;">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <p class="mt-2">Searching...</p>
+        </div>
+
+        <!-- Results -->
+        <div class="row py-4">
+            <div class="col">
+                <div id="searchResults">
+                    <div class="text-center text-muted py-5">
+                        <i class="fas fa-search fa-3x mb-3"></i>
+                        <h4>Ready to search</h4>
+                        <p>Enter a text query or upload an image to get started</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Frame Viewer Modal -->
+    <div class="modal fade" id="frameModal" tabindex="-1">
+        <div class="modal-dialog modal-xl">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Frame Viewer</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div id="frameViewer"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-warning" onclick="startTRECVIDSearch()">
+                        <i class="fas fa-video me-1"></i>TRAKE Search
+                    </button>
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- YouTube Modal -->
+    <div class="modal fade" id="youtubeModal" tabindex="-1">
+        <div class="modal-dialog modal-xl">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">YouTube Video</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div id="youtubePlayer" class="text-center">
+                        <div class="spinner-border text-primary" role="status">
+                            <span class="visually-hidden">Loading video...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/js/bootstrap.bundle.min.js"></script>
+    <script src="static/script.js"></script>
+</body>
+</html>
