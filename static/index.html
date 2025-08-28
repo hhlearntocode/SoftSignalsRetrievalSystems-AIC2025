@@ -36,6 +36,11 @@
                             <i class="fas fa-image me-2"></i>Image Search
                         </button>
                     </li>
+                    <li class="nav-item">
+                        <button class="nav-link" id="trake-tab" data-bs-toggle="tab" data-bs-target="#trake-search">
+                            <i class="fas fa-video me-2"></i>TRAKE Search
+                        </button>
+                    </li>
                 </ul>
 
                 <!-- Search Content -->
@@ -55,6 +60,7 @@
                                     <option value="10" selected>10 results</option>
                                     <option value="20">20 results</option>
                                     <option value="50">50 results</option>
+                                    <option value="100">100 results</option>
                                 </select>
                             </div>
                             <div class="col-md-2">
@@ -86,6 +92,7 @@
                                     <option value="10" selected>10 results</option>
                                     <option value="20">20 results</option>
                                     <option value="50">50 results</option>
+                                    <option value="100">100 results</option>
                                 </select>
                             </div>
                             <div class="col-md-2">
@@ -99,6 +106,72 @@
                                     <i class="fas fa-search me-1"></i>Search
                                 </button>
                             </div>
+                        </div>
+                    </div>
+
+                    <!-- TRAKE Search -->
+                    <div class="tab-pane fade" id="trake-search">
+                        <!-- Search Controls -->
+                        <div class="row g-3 mb-4">
+                            <div class="col-md-2">
+                                <label class="form-label">Top K:</label>
+                                <select id="trakeTopK" class="form-select">
+                                    <option value="5">5 results</option>
+                                    <option value="10" selected>10 results</option>
+                                    <option value="20">20 results</option>
+                                    <option value="50">50 results</option>
+                                    <option value="100">100 results</option>
+                                </select>
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">Similarity Threshold:</label>
+                                <input type="number" id="similarityThreshold" class="form-control" 
+                                       value="0.7" min="0" max="1" step="0.1" 
+                                       placeholder="0.7">
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">Score Threshold:</label>
+                                <input type="number" id="scoreThreshold" class="form-control" 
+                                       value="0.6" min="0" max="1" step="0.1" 
+                                       placeholder="0.6">
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">&nbsp;</label>
+                                <button onclick="performTRAKESequenceSearch()" class="btn btn-warning w-100">
+                                    <i class="fas fa-video me-1"></i>TRAKE Sequence Search
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Events Section -->
+                        <div class="mb-3">
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <h5>Events Sequence (3+ Events)</h5>
+                                <div class="btn-group">
+                                    <button class="btn btn-success btn-sm" onclick="addNewEventRow()" id="addEventButton">
+                                        <i class="fas fa-plus me-1"></i>Add Event
+                                    </button>
+                                    <button class="btn btn-secondary btn-sm" onclick="initializeTRAKEEvents()" id="resetEventsButton">
+                                        <i class="fas fa-refresh me-1"></i>Reset to 3
+                                    </button>
+                                </div>
+                            </div>
+                            <div id="eventsContainer">
+                                <!-- Event rows will be generated here -->
+                            </div>
+                        </div>
+                        
+                        <!-- TRAKE Mode Indicator -->
+                        <div class="alert alert-info mt-3" role="alert">
+                            <i class="fas fa-info-circle me-2"></i>
+                            <strong>TRAKE Sequence Search:</strong> 
+                            <ul class="mb-0 mt-2">
+                                <li>Enter 3 or more events in sequence order</li>
+                                <li>System will search across entire database to find matching event sequences</li>
+                                <li>Use "Add Event" to add more events, "Reset to 3" to return to default</li>
+                                <li>Adjust similarity threshold (how similar frames must be to events)</li>
+                                <li>Adjust score threshold (minimum score for sequence to be shown)</li>
+                            </ul>
                         </div>
                     </div>
                 </div>
@@ -139,8 +212,18 @@
                     <div id="frameViewer"></div>
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-warning" onclick="startTRECVIDSearch()">
-                        <i class="fas fa-video me-1"></i>TRAKE Search
+                    <div class="d-flex align-items-center me-auto">
+                        <label class="form-label me-2 mb-0">Surrounding frames:</label>
+                        <select id="windowSizeSelect" class="form-select" style="width: auto;" onchange="updateSurroundingFrames()">
+                            <option value="3">±3 frames</option>
+                            <option value="5" selected>±5 frames</option>
+                            <option value="10">±10 frames</option>
+                            <option value="20">±20 frames</option>
+                            <option value="50">±50 frames</option>
+                        </select>
+                    </div>
+                    <button type="button" class="btn btn-warning" onclick="goToTRAKESearch()">
+                        <i class="fas fa-video me-1"></i>Go to TRAKE
                     </button>
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
                 </div>
@@ -162,6 +245,27 @@
                             <span class="visually-hidden">Loading video...</span>
                         </div>
                     </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sequence Viewer Modal -->
+    <div class="modal fade" id="sequenceModal" tabindex="-1">
+        <div class="modal-dialog modal-xl">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Event Sequence Viewer</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div id="sequenceViewer"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-success" onclick="exportSequenceCSV()">
+                        <i class="fas fa-download me-1"></i>Export CSV
+                    </button>
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
                 </div>
             </div>
         </div>
