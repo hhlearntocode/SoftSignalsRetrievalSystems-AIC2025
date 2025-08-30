@@ -1,5 +1,53 @@
 /* Custom styles for Image Retrieval System */
 
+/* Image drop zone styles */
+.image-drop-zone {
+    border: 2px dashed #007bff;
+    border-radius: 10px;
+    padding: 30px;
+    text-align: center;
+    background-color: #f8f9fa;
+    transition: all 0.3s ease;
+    cursor: pointer;
+    min-height: 120px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.image-drop-zone.drag-over {
+    border-color: #28a745;
+    background-color: #e8f5e8;
+    transform: scale(1.02);
+}
+
+.image-drop-zone:hover {
+    border-color: #0056b3;
+    background-color: #e3f2fd;
+}
+
+.drop-zone-content {
+    color: #6c757d;
+}
+
+.drop-zone-content i {
+    color: #007bff;
+}
+
+/* Sortable results styles */
+.sortable-results .result-card {
+    cursor: grab;
+}
+
+.sortable-results .result-card.dragging {
+    opacity: 0.5;
+    transform: rotate(2deg);
+}
+
+.sortable-results .result-card:active {
+    cursor: grabbing;
+}
+
 body {
     background-color: #f8f9fa;
 }
@@ -351,4 +399,34 @@ body {
     font-weight: bold;
     margin-top: 5px;
     display: inline-block;
+}
+/* Drag handle styles */
+.drag-handle {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    background: rgba(0,0,0,0.7);
+    color: white;
+    padding: 5px;
+    border-radius: 3px;
+    cursor: grab;
+    font-size: 12px;
+    z-index: 10;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.result-card:hover .drag-handle {
+    opacity: 1;
+}
+
+.drag-handle:active {
+    cursor: grabbing;
+}
+
+/* Drag placeholder */
+.drag-placeholder {
+    border: 2px dashed #007bff;
+    background-color: #f8f9fa;
+    opacity: 0.5;
 }

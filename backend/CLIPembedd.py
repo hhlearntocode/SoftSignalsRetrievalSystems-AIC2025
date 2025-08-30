@@ -25,9 +25,9 @@ FAISS_INDEX_FILE = "keyframe_faiss_clip.index"
 FAISS_ID_MAP_FILE = "keyframe_faiss_map_clip.json"
 
 # Data paths
-KEYFRAMES_ROOT = "/home/root/data/keyframes"
-MEDIA_INFO_ROOT = "/home/root/data/media-info"
-MAP_KEYFRAMES_ROOT = "/home/root/data/map-keyframes"
+KEYFRAMES_ROOT = "backend/keyframes"
+MEDIA_INFO_ROOT = "backend/media-info"
+MAP_KEYFRAMES_ROOT = "backend/map-keyframes"
 
 # --- Database Utility Functions (SQLite) ---
 def adapt_array(arr):

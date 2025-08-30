@@ -252,6 +252,14 @@ function displayResults(results, searchInfo) {
                                 <i class="fas fa-video me-1"></i>${result.video_id}
                             </small>
                         </div>
+                        
+                        <!-- YouTube link with timestamp -->
+                        <div class="mt-2">
+                            <a href="#" onclick="openYouTubeAtTimestamp('${result.watch_url}', ${result.pts_time}); return false;" 
+                               class="btn btn-sm btn-outline-danger w-100">
+                                <i class="fab fa-youtube me-1"></i>Watch at ${formatTime(result.pts_time)}
+                            </a>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -338,6 +346,9 @@ function displayFrameViewer(data) {
                     </button>
                     <button class="btn btn-primary btn-sm" onclick="searchWithCurrentFrame()">
                         <i class="fas fa-search me-1"></i>Image Search
+                    </button>
+                    <button class="btn btn-warning btn-sm" onclick="exportCSVWithCurrentFrame()">
+                        <i class="fas fa-download me-1"></i>Save CSV
                     </button>
                 </div>
                 
@@ -869,6 +880,68 @@ async function searchWithCurrentFrame() {
         showError('Failed to search with current frame: ' + error.message);
     } finally {
         showLoading(false);
+    }
+}
+
+// Export CSV with current frame at top
+function exportCSVWithCurrentFrame() {
+    if (!currentSearchResults || currentSearchResults.length === 0) {
+        showError('No search results to export');
+        return;
+    }
+    
+    if (!currentFrame) {
+        showError('No current frame selected');
+        return;
+    }
+    
+    try {
+        // Find the current frame in the results
+        const currentFrameResult = currentSearchResults.find(result => result.id === currentFrame);
+        
+        if (!currentFrameResult) {
+            showError('Current frame not found in search results');
+            return;
+        }
+        
+        // Create ordered results with current frame first
+        const orderedResults = [currentFrameResult];
+        
+        // Add all other results
+        currentSearchResults.forEach(result => {
+            if (result.id !== currentFrame) {
+                orderedResults.push(result);
+            }
+        });
+        
+        // Create CSV content without header
+        let csvContent = "";
+        
+        orderedResults.forEach(result => {
+            const videoId = result.video_id;
+            const frameIndex = result.frame_idx;
+            
+            csvContent += `${videoId},${frameIndex}\n`;
+        });
+        
+        // Create and trigger download
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement('a');
+        const url = URL.createObjectURL(blob);
+        
+        link.setAttribute('href', url);
+        link.setAttribute('download', `search_results_${currentFrameResult.video_id}_frame_${currentFrameResult.keyframe_n}_${new Date().toISOString().slice(0,10)}.csv`);
+        link.style.visibility = 'hidden';
+        
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        
+        showSuccess(`Exported ${orderedResults.length} results with frame ${currentFrameResult.keyframe_n} at top`);
+        
+    } catch (error) {
+        console.error('Error exporting CSV with current frame:', error);
+        showError('Failed to export CSV: ' + error.message);
     }
 }
 
@@ -1621,6 +1694,19 @@ async function performTRAKESearch() {
         } finally {
             showLoading(false);
         }
+    }
+}
+
+// Open YouTube video at specific timestamp
+function openYouTubeAtTimestamp(watchUrl, ptsTime) {
+    const videoId = extractYouTubeId(watchUrl);
+    const startTime = Math.floor(ptsTime);
+    
+    if (videoId) {
+        const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}&t=${startTime}s`;
+        window.open(youtubeUrl, '_blank');
+    } else {
+        showError('Invalid YouTube URL: ' + watchUrl);
     }
 }
 
