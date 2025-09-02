@@ -57,10 +57,11 @@ async function loadStatistics() {
         
         console.log('Backend health:', health);
         
-        if (!health.clip_model_loaded) {
-            showError('CLIP model not loaded on backend. Please check server logs.');
+        if (!health.siglip_model_loaded) {
+            showError('Models not loaded on backend. Please check server logs.');
             return;
         }
+        
         
         if (!health.faiss_index_loaded) {
             showError('FAISS index not loaded. Please run migration script first.');
