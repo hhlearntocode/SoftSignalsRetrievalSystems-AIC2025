@@ -12,6 +12,7 @@ import torch
 from transformers import CLIPProcessor, CLIPModel, AutoProcessor
 import faiss
 from typing import List, Optional
+from googletrans import Translator
 
 # from pydantic import BaseModel  # Not needed since we use plain dicts
 import uvicorn
@@ -39,6 +40,7 @@ siglip_model = None
 siglip_processor = None
 faiss_index = None
 faiss_id_map = None
+translator = None
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 # We'll use plain dictionaries instead of Pydantic models for response data
@@ -77,6 +79,40 @@ def load_siglip_model():
     except Exception as e:
         print(f"Error loading SigLIP model: {e}")
         raise e
+
+
+def initialize_translator():
+    """Initialize Google Translator"""
+    global translator
+    try:
+        translator = Translator()
+        print("Google Translator initialized successfully")
+    except Exception as e:
+        print(f"Error initializing translator: {e}")
+        translator = None
+
+
+def translate_text(text, target_lang="en", source_lang="auto"):
+    """Translate text to target language"""
+    global translator
+    if translator is None:
+        return text, False  # Return original text if translator not available
+
+    try:
+        # Detect if text is already in English (or target language)
+        detection = translator.detect(text)
+        if detection.lang == target_lang:
+            return text, False
+
+        # Translate text
+        result = translator.translate(text, src=source_lang, dest=target_lang)
+        print(
+            f"Translated '{text}' from {detection.lang} to {target_lang}: '{result.text}'"
+        )
+        return result.text, True
+    except Exception as e:
+        print(f"Translation error: {e}")
+        return text, False  # Return original text if translation fails
 
 
 def build_faiss_index():
@@ -303,6 +339,10 @@ async def startup_event():
         load_siglip_model()
         print("✅ SigLIP model loaded successfully")
 
+        print("Initializing translator...")
+        initialize_translator()
+        print("✅ Translator initialized successfully")
+
         print("Building/Loading FAISS index...")
         build_faiss_index()
         print("✅ FAISS index ready")
@@ -328,6 +368,7 @@ async def health_check():
         "siglip_model_loaded": siglip_model is not None,
         "faiss_index_loaded": faiss_index is not None,
         "faiss_index_size": faiss_index.ntotal if faiss_index else 0,
+        "translator_loaded": translator is not None,
     }
 
 
@@ -397,10 +438,21 @@ async def search_by_text(
     query: str = Query(..., description="Text query"),
     top_k: int = Query(10, description="Number of results to return"),
     video_id: Optional[str] = Query(None, description="Search within specific video"),
+    translate: bool = Query(
+        True, description="Auto-translate non-English queries to English"
+    ),
+    target_lang: str = Query("en", description="Target language for translation"),
 ):
-    """Search images by text query"""
+    """Search images by text query with optional translation"""
     if not query.strip():
         raise HTTPException(status_code=400, detail="Query cannot be empty")
+
+    original_query = query
+    translated = False
+
+    # Translate query if requested
+    if translate:
+        query, translated = translate_text(query, target_lang)
 
     try:
         # Encode text query
@@ -409,12 +461,47 @@ async def search_by_text(
         # Search
         results = search_with_embedding(text_embedding, top_k, video_id)
 
-        return {"query": query, "results": results, "total_found": len(results)}
+        return {
+            "original_query": original_query,
+            "query": query,
+            "translated": translated,
+            "results": results,
+            "total_found": len(results),
+        }
     except HTTPException as he:
         raise he
     except Exception as e:
         print(f"Error in text search: {e}")
         raise HTTPException(status_code=500, detail=f"Search error: {str(e)}")
+
+
+@app.post("/translate")
+async def translate_query(
+    text: str = Query(..., description="Text to translate"),
+    target_lang: str = Query(
+        "en", description="Target language code (e.g., 'en', 'vi', 'es')"
+    ),
+    source_lang: str = Query(
+        "auto", description="Source language code or 'auto' for detection"
+    ),
+):
+    """Translate text to target language"""
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="Text cannot be empty")
+
+    try:
+        translated_text, was_translated = translate_text(text, target_lang, source_lang)
+
+        return {
+            "original_text": text,
+            "translated_text": translated_text,
+            "was_translated": was_translated,
+            "target_language": target_lang,
+            "source_language": source_lang,
+        }
+    except Exception as e:
+        print(f"Error in translation: {e}")
+        raise HTTPException(status_code=500, detail=f"Translation error: {str(e)}")
 
 
 @app.post("/search/image")
