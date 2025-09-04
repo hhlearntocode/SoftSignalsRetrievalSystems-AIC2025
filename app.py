@@ -13,9 +13,10 @@ from transformers import CLIPProcessor, CLIPModel
 import faiss
 from typing import List, Optional
 from googletrans import Translator
+# from pydantic import BaseModel  # Not needed since we use plain dicts
 import uvicorn
 
-# Configuration
+# Configuration - Updated to match file 2's database structure
 DATABASE_FILE = "D:/keyframe_embeddings_clip.db"
 FAISS_INDEX_FILE = "D:/keyframe_faiss_clip.index"
 FAISS_ID_MAP_FILE = "D:/keyframe_faiss_map_clip.json"
@@ -40,6 +41,10 @@ faiss_index = None
 faiss_id_map = None
 translator = None
 device = "cuda" if torch.cuda.is_available() else "cpu"
+video_embeddings_cache = {}  # Cache for video-specific embeddings
+
+# We'll use plain dictionaries instead of Pydantic models for response data
+# to avoid serialization issues
 
 # Database utilities
 def adapt_array(arr):
@@ -116,7 +121,7 @@ def build_faiss_index():
         except Exception as e:
             print(f"Error loading existing FAISS index: {e}")
     
-    # Build new index from database
+    # Build new index from database - Updated table name
     print("Building FAISS index from database...")
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -202,106 +207,203 @@ def encode_text(text):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error encoding text: {str(e)}")
 
-def search_with_embedding(query_embedding, top_k=10, video_id=None):
-    """Search using embedding vector and return ranked metadata with correct scores."""
-    if faiss_index is None or faiss_id_map is None:
-        raise HTTPException(status_code=500, detail="FAISS index not available")
-
-    # Prepare query: float32, 2D, contiguous
-    q = np.asarray(query_embedding, dtype="float32")
-    if q.ndim == 1:
-        q = q[None, :]
-    q = np.ascontiguousarray(q)
-
-    # Normalize for cosine similarity via inner product
-    try:
-        faiss.normalize_L2(q)
-    except Exception:
-        pass
-
-    # Run search
-    try:
-        D, I = faiss_index.search(q, top_k)
-    except Exception as e:
-        print(f"FAISS search error: {e}")
-        return []
-
-    # Map FAISS indices -> DB ids, keep rank
-    faiss_hits = []
-    for rank, (idx, dist) in enumerate(zip(I[0], D[0])):
-        if idx == -1:
-            continue
-        db_id = faiss_id_map[idx]
-        faiss_hits.append((db_id, float(dist)))
-
-    if not faiss_hits:
-        return []
-
-    # Extract DB IDs for querying
-    db_ids = [hid for (hid, _) in faiss_hits]
-
-    # Fetch rows from database
+def get_video_embeddings(video_id):
+    """Get embeddings for a specific video (with caching) - Updated table name"""
+    global video_embeddings_cache
+    
+    if video_id in video_embeddings_cache:
+        return video_embeddings_cache[video_id]
+    
     conn = get_db_connection()
     cursor = conn.cursor()
+    cursor.execute("SELECT id, embedding FROM keyframe_embeddings WHERE video_id = ? ORDER BY keyframe_n", (video_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    
+    embeddings = []
+    ids = []
+    for row in rows:
+        if row['embedding'] is not None and len(row['embedding']) > 0:
+            embeddings.append(row['embedding'].flatten())
+            ids.append(row['id'])
+    
+    if embeddings:
+        embeddings_np = np.array(embeddings).astype('float32')
+        faiss.normalize_L2(embeddings_np)
+        video_embeddings_cache[video_id] = (embeddings_np, ids)
+        return embeddings_np, ids
+    
+    return None, None
 
-    placeholders = ",".join(["?"] * len(db_ids))
-    base_query = f"SELECT * FROM keyframe_embeddings WHERE id IN ({placeholders})"
-    params = db_ids
+def search_videos_embeddings(query_embedding, video_ids, top_k=10):
+    """Search within specific videos' embeddings - Updated table name"""
+    if not video_ids:
+        return []
 
-    if video_id is not None:
-        base_query += " AND video_id = ?"
-        params = db_ids + [video_id]
+    # Ensure embedding is 2D float32
+    query_embedding = np.array(query_embedding).astype('float32')
+    if query_embedding.ndim == 1:
+        query_embedding = np.expand_dims(query_embedding, axis=0)
+    faiss.normalize_L2(query_embedding)
 
-    cursor.execute(base_query, params)
+    all_embeddings = []
+    all_ids = []
+
+    for video_id in video_ids:
+        video_embeddings, video_db_ids = get_video_embeddings(video_id)
+        if video_embeddings is not None and len(video_embeddings) > 0:
+            video_embeddings = np.array(video_embeddings).astype('float32')
+            all_embeddings.append(video_embeddings)
+            all_ids.extend(video_db_ids)
+        else:
+            print(f"No embeddings found for video {video_id}")
+
+    if not all_embeddings:
+        return []
+
+    # Stack all embeddings into one array
+    embeddings_np = np.vstack(all_embeddings)
+    faiss.normalize_L2(embeddings_np)
+
+    # Build temporary FAISS index
+    temp_index = faiss.IndexFlatIP(embeddings_np.shape[1])
+    temp_index.add(embeddings_np)
+
+    # Perform search
+    scores, indices = temp_index.search(query_embedding, min(top_k, temp_index.ntotal))
+
+    # Get corresponding DB IDs
+    matched_ids = [all_ids[i] for i in indices[0] if i != -1]
+    if not matched_ids:
+        return []
+
+    # Query database - Updated table name
+    conn = get_db_connection()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    placeholders = ','.join(['?' for _ in matched_ids])
+    sql = f"SELECT * FROM keyframe_embeddings WHERE id IN ({placeholders})"
+    cursor.execute(sql, matched_ids)
     rows = cursor.fetchall()
     conn.close()
 
-    if not rows:
+    # Map ID to row
+    id_to_row = {row['id']: row for row in rows}
+
+    # Combine result with similarity
+    results = []
+    for rank, idx in enumerate(indices[0]):
+        if idx == -1:
+            continue
+        db_id = all_ids[idx]
+        row = id_to_row.get(db_id)
+        if row:
+            result = {
+                "id": row['id'],
+                "video_id": row['video_id'],
+                "keyframe_n": row['keyframe_n'],
+                "image_filename": row['image_filename'],
+                "image_path": row['image_path'],
+                "pts_time": row['pts_time'],
+                "fps": row['fps'],
+                "frame_idx": row['frame_idx'],
+                "video_title": row['video_title'],
+                "video_author": row['video_author'],
+                "video_description": row['video_description'],
+                "video_length": row['video_length'],
+                "publish_date": row['publish_date'],
+                "watch_url": row['watch_url'],
+                "thumbnail_url": row['thumbnail_url'],
+                "similarity": float(scores[0][rank])
+            }
+            results.append(result)
+
+    results.sort(key=lambda x: x['similarity'], reverse=True)
+    return results[:top_k]
+
+def search_with_embedding(query_embedding, top_k=10, video_id=None):
+    """Search using embedding vector in FAISS and return metadata from database - Updated table name"""
+    if faiss_index is None or faiss_id_map is None:
+        raise HTTPException(status_code=500, detail="FAISS index not available")
+
+    if video_id:
+        # Parse comma-separated video IDs
+        video_ids = [vid.strip() for vid in video_id.split(',') if vid.strip()]
+        return search_videos_embeddings(query_embedding, video_ids, top_k)
+
+    # Ensure embedding is a 2D float32 numpy array
+    query_embedding = np.array(query_embedding).astype('float32')
+    if query_embedding.ndim == 1:
+        query_embedding = np.expand_dims(query_embedding, axis=0)
+
+    # Normalize the embedding
+    faiss.normalize_L2(query_embedding)
+
+    # Perform search in FAISS index
+    search_k = min(top_k * 2, faiss_index.ntotal)
+    if search_k == 0:
+        return []  # nothing in index
+    scores, indices = faiss_index.search(query_embedding, search_k)
+
+    # Extract valid FAISS result indices and map to DB IDs
+    db_ids = []
+    index_id_map = {}
+    for rank, faiss_idx in enumerate(indices[0]):
+        if faiss_idx != -1 and faiss_idx < len(faiss_id_map):
+            db_id = faiss_id_map[faiss_idx]
+            db_ids.append(db_id)
+            index_id_map[db_id] = rank  # to keep similarity mapping later
+
+    if not db_ids:
         return []
 
-    # Build a lookup from id -> row
-    row_by_id = {row["id"]: row for row in rows}
+    # Connect to the database
+    conn = get_db_connection()
+    conn.row_factory = sqlite3.Row  # to get dict-like rows
+    cursor = conn.cursor()
 
-    # Determine if higher score is better (for inner product, yes)
-    higher_is_better = True
-    try:
-        metric = getattr(faiss_index, "metric_type", None)
-        if metric == faiss.METRIC_L2:
-            higher_is_better = False
-    except Exception:
-        pass
+    # SQL query to get metadata - Updated table name
+    placeholders = ','.join(['?' for _ in db_ids])
+    sql = f"SELECT * FROM keyframe_embeddings WHERE id IN ({placeholders})"
+    params = db_ids
 
-    # Compose results in the original FAISS rank order
+    if video_id is not None:
+        sql += " AND video_id = ?"
+        params = db_ids + [video_id]
+
+    cursor.execute(sql, params)
+    rows = cursor.fetchall()
+    conn.close()
+
+    # Map results and attach similarity score
+    id_to_row = {row['id']: row for row in rows}
     results = []
-    for db_id, dist in faiss_hits:
-        row = row_by_id.get(db_id)
-        if row is None:
-            continue
-        results.append(
-            {
-                "id": row["id"],
-                "video_id": row["video_id"],
-                "keyframe_n": row["keyframe_n"],
-                "image_filename": row["image_filename"],
-                "image_path": row["image_path"],
-                "pts_time": row["pts_time"],
-                "fps": row["fps"],
-                "frame_idx": row["frame_idx"],
-                "video_title": row["video_title"],
-                "video_author": row["video_author"],
-                "video_description": row["video_description"],
-                "video_length": row["video_length"],
-                "publish_date": row["publish_date"],
-                "watch_url": row["watch_url"],
-                "thumbnail_url": row["thumbnail_url"],
-                # Store as 'similarity' where higher is always better
-                "similarity": (-dist if not higher_is_better else dist),
+    for db_id in db_ids:
+        row = id_to_row.get(db_id)
+        if row:
+            rank = index_id_map[db_id]
+            result = {
+                "id": row['id'],
+                "video_id": row['video_id'],
+                "keyframe_n": row['keyframe_n'],
+                "image_filename": row['image_filename'],
+                "image_path": row['image_path'],
+                "pts_time": row['pts_time'],
+                "fps": row['fps'],
+                "frame_idx": row['frame_idx'],
+                "video_title": row['video_title'],
+                "video_author": row['video_author'],
+                "video_description": row['video_description'],
+                "video_length": row['video_length'],
+                "publish_date": row['publish_date'],
+                "watch_url": row['watch_url'],
+                "thumbnail_url": row['thumbnail_url'],
+                "similarity": float(scores[0][rank])
             }
-        )
+            results.append(result)
 
-    # Sort by similarity score (higher is better)
-    results.sort(key=lambda x: x["similarity"], reverse=True)
-
+    # Sort by similarity and return top_k
+    results.sort(key=lambda x: x['similarity'], reverse=True)
     return results[:top_k]
 
 # API Routes
@@ -347,7 +449,7 @@ async def health_check():
 
 @app.get("/test/frame/{frame_id}")
 async def test_frame(frame_id: int):
-    """Simple test endpoint for frame data"""
+    """Simple test endpoint for frame data - Updated table name"""
     try:
         if not os.path.exists(DATABASE_FILE):
             return {"error": "Database not found"}
@@ -371,7 +473,7 @@ async def test_frame(frame_id: int):
 
 @app.get("/debug/db")
 async def debug_database():
-    """Debug database structure and sample data"""
+    """Debug database structure and sample data - Updated table name"""
     if not os.path.exists(DATABASE_FILE):
         return {"error": "Database file not found"}
     
@@ -406,7 +508,7 @@ async def debug_database():
 async def search_by_text(
     query: str = Query(..., description="Text query"),
     top_k: int = Query(10, description="Number of results to return"),
-    video_id: Optional[str] = Query(None, description="Search within specific video"),
+    video_id: Optional[str] = Query(None, description="Search within specific video(s). Use comma-separated values for multiple videos: 'video1,video2,video3'"),
     translate: bool = Query(
         True, description="Auto-translate non-English queries to English"
     ),
@@ -475,7 +577,7 @@ async def translate_query(
 async def search_by_image(
     file: UploadFile = File(...),
     top_k: int = Query(10, description="Number of results to return"),
-    video_id: Optional[str] = Query(None, description="Search within specific video")
+    video_id: Optional[str] = Query(None, description="Search within specific video(s). Use comma-separated values for multiple videos: 'video1,video2,video3'")
 ):
     """Search images by uploaded image"""
     if not file.content_type.startswith('image/'):
@@ -502,7 +604,7 @@ async def search_by_image(
 
 @app.get("/frame/{frame_id}")
 async def get_frame_metadata(frame_id: int):
-    """Get metadata for a specific frame"""
+    """Get metadata for a specific frame - Updated table name"""
     try:
         if not os.path.exists(DATABASE_FILE):
             raise HTTPException(status_code=500, detail="Database not found")
@@ -537,7 +639,7 @@ async def get_surrounding_frames(
     frame_id: int,
     window_size: int = Query(5, description="Number of frames before and after")
 ):
-    """Get surrounding frames for a specific frame"""
+    """Get surrounding frames for a specific frame - Updated table name"""
     try:
         if not os.path.exists(DATABASE_FILE):
             raise HTTPException(status_code=500, detail="Database not found. Please run migration script first.")
@@ -613,7 +715,7 @@ async def get_surrounding_frames(
 
 @app.get("/video/{video_id}/frames")
 async def get_video_frames(video_id: str):
-    """Get all frames for a specific video"""
+    """Get all frames for a specific video - Updated table name"""
     try:
         if not os.path.exists(DATABASE_FILE):
             raise HTTPException(status_code=500, detail="Database not found")
@@ -646,7 +748,7 @@ async def get_video_frames(video_id: str):
 
 @app.get("/stats")
 async def get_statistics():
-    """Get database statistics"""
+    """Get database statistics - Updated table name"""
     conn = get_db_connection()
     cursor = conn.cursor()
     
@@ -668,7 +770,7 @@ async def get_statistics():
         "top_videos": [dict(row) for row in top_videos]
     }
 
-# Serve static files (images)
+# Serve static files (images) - Keep original path structure
 app.mount("/images", StaticFiles(directory="D:/keyframes"), name="images")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
