@@ -13,15 +13,14 @@ from transformers import CLIPProcessor, CLIPModel
 import faiss
 from typing import List, Optional
 from googletrans import Translator
-# from pydantic import BaseModel  # Not needed since we use plain dicts
 import uvicorn
 
 # Configuration
-DATABASE_FILE = "image_retrieval.db"
-FAISS_INDEX_FILE = "faiss_index.bin"
-FAISS_ID_MAP_FILE = "faiss_id_map.json"
-EMBEDDING_DIM = 512  # Adjust based on your embeddings
-CLIP_MODEL_NAME = "openai/clip-vit-base-patch32"
+DATABASE_FILE = "keyframe_embeddings_clip.db"
+FAISS_INDEX_FILE = "keyframe_faiss_clip.index"
+FAISS_ID_MAP_FILE = "keyframe_faiss_map_clip.json"
+EMBEDDING_DIM = 1280  # CLIP embedding dimension
+CLIP_MODEL_NAME = "laion/CLIP-ViT-bigG-14-laion2B-39B-b160k"
 
 app = FastAPI(title="Image Retrieval API", version="1.0.0")
 
@@ -41,20 +40,21 @@ faiss_index = None
 faiss_id_map = None
 translator = None
 device = "cuda" if torch.cuda.is_available() else "cpu"
-video_embeddings_cache = {}  # Cache for video-specific embeddings
-
-# We'll use plain dictionaries instead of Pydantic models for response data
-# to avoid serialization issues
 
 # Database utilities
+
+
 def adapt_array(arr):
     return arr.tobytes()
+
 
 def convert_array(text):
     return np.frombuffer(text, dtype=np.float32)
 
+
 sqlite3.register_adapter(np.ndarray, adapt_array)
 sqlite3.register_converter("array", convert_array)
+
 
 def get_db_connection():
     conn = sqlite3.connect(DATABASE_FILE, detect_types=sqlite3.PARSE_DECLTYPES)
@@ -62,6 +62,8 @@ def get_db_connection():
     return conn
 
 # Model loading functions
+
+
 def load_clip_model():
     global clip_model, clip_processor
     try:
@@ -75,6 +77,7 @@ def load_clip_model():
         print(f"Error loading CLIP model: {e}")
         raise e
 
+
 def initialize_translator():
     """Initialize Google Translator"""
     global translator
@@ -85,31 +88,30 @@ def initialize_translator():
         print(f"Error initializing translator: {e}")
         translator = None
 
+
 def translate_text(text, target_lang="en", source_lang="auto"):
     """Translate text to target language"""
     global translator
     if translator is None:
-        return text, False  # Return original text if translator not available
+        return text, False
 
     try:
-        # Detect if text is already in English (or target language)
         detection = translator.detect(text)
         if detection.lang == target_lang:
             return text, False
 
-        # Translate text
         result = translator.translate(text, src=source_lang, dest=target_lang)
         print(
-            f"Translated '{text}' from {detection.lang} to {target_lang}: '{result.text}'"
-        )
+            f"Translated '{text}' from {detection.lang} to {target_lang}: '{result.text}'")
         return result.text, True
     except Exception as e:
         print(f"Translation error: {e}")
-        return text, False  # Return original text if translation fails
+        return text, False
+
 
 def build_faiss_index():
     global faiss_index, faiss_id_map
-    
+
     # Check if index files exist
     if os.path.exists(FAISS_INDEX_FILE) and os.path.exists(FAISS_ID_MAP_FILE):
         try:
@@ -120,325 +122,222 @@ def build_faiss_index():
             return
         except Exception as e:
             print(f"Error loading existing FAISS index: {e}")
-    
+
     # Build new index from database
     print("Building FAISS index from database...")
     conn = get_db_connection()
     cursor = conn.cursor()
-    
+
     cursor.execute("SELECT id, embedding FROM keyframe_embeddings ORDER BY id")
     rows = cursor.fetchall()
-    
+
     if not rows:
         print("No embeddings found in database")
         conn.close()
         return
-    
+
     embeddings = []
     ids = []
-    
+
     for row in rows:
         db_id = row['id']
         embedding = row['embedding']
         if embedding is not None and len(embedding) > 0:
-            # Reshape embedding if needed
             if len(embedding.shape) == 1:
                 embedding = embedding.reshape(1, -1)
             embeddings.append(embedding.flatten())
             ids.append(db_id)
-    
+
     if not embeddings:
         print("No valid embeddings found")
         conn.close()
         return
-    
+
     embeddings_np = np.array(embeddings).astype('float32')
-    print(f"Building index with {len(embeddings)} vectors of dimension {embeddings_np.shape[1]}")
-    
+    print(
+        f"Building index with {len(embeddings)} vectors of dimension {embeddings_np.shape[1]}")
+
     # Normalize embeddings for cosine similarity
     faiss.normalize_L2(embeddings_np)
-    
+
     # Create FAISS index
-    index = faiss.IndexFlatIP(embeddings_np.shape[1])  # Inner product for cosine similarity
+    index = faiss.IndexFlatIP(embeddings_np.shape[1])
     index.add(embeddings_np)
-    
+
     # Save index and ID mapping
     faiss.write_index(index, FAISS_INDEX_FILE)
     with open(FAISS_ID_MAP_FILE, 'w') as f:
         json.dump(ids, f)
-    
+
     faiss_index = index
     faiss_id_map = ids
-    
+
     print(f"FAISS index built and saved: {faiss_index.ntotal} vectors")
     conn.close()
+
 
 def encode_image(image):
     """Encode image using CLIP model"""
     if clip_model is None or clip_processor is None:
         raise HTTPException(status_code=500, detail="CLIP model not loaded")
-    
+
     try:
         inputs = clip_processor(images=image, return_tensors="pt")
         inputs = {k: v.to(device) for k, v in inputs.items()}
-        
+
         with torch.no_grad():
             image_features = clip_model.get_image_features(**inputs)
-            image_features = image_features / image_features.norm(dim=-1, keepdim=True)
-            
+            image_features = image_features / \
+                image_features.norm(dim=-1, keepdim=True)
+
         return image_features.cpu().numpy().astype('float32')
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error encoding image: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Error encoding image: {str(e)}")
+
 
 def encode_text(text):
     """Encode text using CLIP model"""
     if clip_model is None or clip_processor is None:
         raise HTTPException(status_code=500, detail="CLIP model not loaded")
-    
+
     try:
         inputs = clip_processor(text=[text], return_tensors="pt", padding=True)
         inputs = {k: v.to(device) for k, v in inputs.items()}
-        
+
         with torch.no_grad():
             text_features = clip_model.get_text_features(**inputs)
-            text_features = text_features / text_features.norm(dim=-1, keepdim=True)
-            
+            text_features = text_features / \
+                text_features.norm(dim=-1, keepdim=True)
+
         return text_features.cpu().numpy().astype('float32')
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error encoding text: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Error encoding text: {str(e)}")
 
-def get_video_embeddings(video_id):
-    """Get embeddings for a specific video (with caching)"""
-    global video_embeddings_cache
-    
-    if video_id in video_embeddings_cache:
-        return video_embeddings_cache[video_id]
-    
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, embedding FROM keyframe_embeddings WHERE video_id = ? ORDER BY keyframe_n", (video_id,))
-    rows = cursor.fetchall()
-    conn.close()
-    
-    embeddings = []
-    ids = []
-    for row in rows:
-        if row['embedding'] is not None and len(row['embedding']) > 0:
-            embeddings.append(row['embedding'].flatten())
-            ids.append(row['id'])
-    
-    if embeddings:
-        embeddings_np = np.array(embeddings).astype('float32')
-        faiss.normalize_L2(embeddings_np)
-        video_embeddings_cache[video_id] = (embeddings_np, ids)
-        return embeddings_np, ids
-    
-    return None, None
-
-def search_videos_embeddings(query_embedding, video_ids, top_k=10):
-    """Search within specific videos' embeddings"""
-    if not video_ids:
-        return []
-
-    # Ensure embedding is 2D float32
-    query_embedding = np.array(query_embedding).astype('float32')
-    if query_embedding.ndim == 1:
-        query_embedding = np.expand_dims(query_embedding, axis=0)
-    faiss.normalize_L2(query_embedding)
-
-    all_embeddings = []
-    all_ids = []
-
-    for video_id in video_ids:
-        video_embeddings, video_db_ids = get_video_embeddings(video_id)
-        if video_embeddings is not None and len(video_embeddings) > 0:
-            video_embeddings = np.array(video_embeddings).astype('float32')
-            all_embeddings.append(video_embeddings)
-            all_ids.extend(video_db_ids)
-        else:
-            print(f"No embeddings found for video {video_id}")
-
-    if not all_embeddings:
-        return []
-
-    # Stack all embeddings into one array
-    embeddings_np = np.vstack(all_embeddings)
-    faiss.normalize_L2(embeddings_np)
-
-    # Build temporary FAISS index
-    temp_index = faiss.IndexFlatIP(embeddings_np.shape[1])
-    temp_index.add(embeddings_np)
-
-    # Perform search
-    scores, indices = temp_index.search(query_embedding, min(top_k, temp_index.ntotal))
-
-    # Get corresponding DB IDs
-    matched_ids = [all_ids[i] for i in indices[0] if i != -1]
-    if not matched_ids:
-        return []
-
-    # Query database
-    conn = get_db_connection()
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    placeholders = ','.join(['?' for _ in matched_ids])
-    sql = f"SELECT * FROM keyframe_embeddings WHERE id IN ({placeholders})"
-    cursor.execute(sql, matched_ids)
-    rows = cursor.fetchall()
-    conn.close()
-
-    # Map ID to row
-    id_to_row = {row['id']: row for row in rows}
-
-    # Combine result with similarity
-    results = []
-    for rank, idx in enumerate(indices[0]):
-        if idx == -1:
-            continue
-        db_id = all_ids[idx]
-        row = id_to_row.get(db_id)
-        if row:
-            result = {
-                "id": row['id'],
-                "video_id": row['video_id'],
-                "keyframe_n": row['keyframe_n'],
-                "image_filename": row['image_filename'],
-                "image_path": row['image_path'],
-                "pts_time": row['pts_time'],
-                "fps": row['fps'],
-                "frame_idx": row['frame_idx'],
-                "video_title": row['video_title'],
-                "video_author": row['video_author'],
-                "video_description": row['video_description'],
-                "video_length": row['video_length'],
-                "publish_date": row['publish_date'],
-                "watch_url": row['watch_url'],
-                "thumbnail_url": row['thumbnail_url'],
-                "channel_id": row.get('channel_id'),
-                "channel_url": row.get('channel_url'),
-                "similarity": float(scores[0][rank])
-            }
-            results.append(result)
-
-    results.sort(key=lambda x: x['similarity'], reverse=True)
-    return results[:top_k]
 
 def search_with_embedding(query_embedding, top_k=10, video_id=None):
-    """Search using embedding vector in FAISS and return metadata from database"""
+    """Search using embedding vector and return ranked metadata with correct scores."""
     if faiss_index is None or faiss_id_map is None:
-        raise HTTPException(status_code=500, detail="FAISS index not available")
+        raise HTTPException(
+            status_code=500, detail="FAISS index not available")
 
-    if video_id:
-        # Parse comma-separated video IDs
-        video_ids = [vid.strip() for vid in video_id.split(',') if vid.strip()]
-        return search_videos_embeddings(query_embedding, video_ids, top_k)
+    # Prepare query: float32, 2D, contiguous
+    q = np.asarray(query_embedding, dtype="float32")
+    if q.ndim == 1:
+        q = q[None, :]
+    q = np.ascontiguousarray(q)
 
-    # Ensure embedding is a 2D float32 numpy array
-    query_embedding = np.array(query_embedding).astype('float32')
-    if query_embedding.ndim == 1:
-        query_embedding = np.expand_dims(query_embedding, axis=0)
+    # Normalize for cosine similarity
+    try:
+        faiss.normalize_L2(q)
+    except Exception:
+        pass
 
-    # Normalize the embedding
-    faiss.normalize_L2(query_embedding)
-
-    # Perform search in FAISS index
-    search_k = min(top_k * 2, faiss_index.ntotal)
-    if search_k == 0:
-        return []  # nothing in index
-    scores, indices = faiss_index.search(query_embedding, search_k)
-
-    # Extract valid FAISS result indices and map to DB IDs
-    db_ids = []
-    index_id_map = {}
-    for rank, faiss_idx in enumerate(indices[0]):
-        if faiss_idx != -1 and faiss_idx < len(faiss_id_map):
-            db_id = faiss_id_map[faiss_idx]
-            db_ids.append(db_id)
-            index_id_map[db_id] = rank  # to keep similarity mapping later
-
-    if not db_ids:
+    # Run search
+    try:
+        D, I = faiss_index.search(q, top_k)
+    except Exception as e:
+        print(f"FAISS search error: {e}")
         return []
 
-    # Connect to the database
+    # Map FAISS indices -> DB ids
+    faiss_hits = []
+    for rank, (idx, dist) in enumerate(zip(I[0], D[0])):
+        if idx == -1:
+            continue
+        db_id = faiss_id_map[idx]
+        faiss_hits.append((db_id, float(dist)))
+
+    if not faiss_hits:
+        return []
+
+    # Fetch rows from database
+    db_ids = [hid for (hid, _) in faiss_hits]
+
     conn = get_db_connection()
-    conn.row_factory = sqlite3.Row  # to get dict-like rows
     cursor = conn.cursor()
 
-    # SQL query to get metadata
-    placeholders = ','.join(['?' for _ in db_ids])
-    sql = f"SELECT * FROM keyframe_embeddings WHERE id IN ({placeholders})"
+    placeholders = ",".join(["?"] * len(db_ids))
+    base_query = f"SELECT * FROM keyframe_embeddings WHERE id IN ({placeholders})"
     params = db_ids
 
     if video_id is not None:
-        sql += " AND video_id = ?"
+        base_query += " AND video_id = ?"
         params = db_ids + [video_id]
 
-    cursor.execute(sql, params)
+    cursor.execute(base_query, params)
     rows = cursor.fetchall()
     conn.close()
 
-    # Map results and attach similarity score
-    id_to_row = {row['id']: row for row in rows}
-    results = []
-    for db_id in db_ids:
-        row = id_to_row.get(db_id)
-        if row:
-            rank = index_id_map[db_id]
-            result = {
-                "id": row['id'],
-                "video_id": row['video_id'],
-                "keyframe_n": row['keyframe_n'],
-                "image_filename": row['image_filename'],
-                "image_path": row['image_path'],
-                "pts_time": row['pts_time'],
-                "fps": row['fps'],
-                "frame_idx": row['frame_idx'],
-                "video_title": row['video_title'],
-                "video_author": row['video_author'],
-                "video_description": row['video_description'],
-                "video_length": row['video_length'],
-                "publish_date": row['publish_date'],
-                "watch_url": row['watch_url'],
-                "thumbnail_url": row['thumbnail_url'],
-                "channel_id": row.get('channel_id'),
-                "channel_url": row.get('channel_url'),
-                "similarity": float(scores[0][rank])
-            }
-            results.append(result)
+    if not rows:
+        return []
 
-    # Sort by similarity and return top_k
-    results.sort(key=lambda x: x['similarity'], reverse=True)
+    # Build lookup from id -> row
+    row_by_id = {row["id"]: row for row in rows}
+
+    # Compose results in FAISS rank order
+    results = []
+    for db_id, dist in faiss_hits:
+        row = row_by_id.get(db_id)
+        if row is None:
+            continue
+        results.append({
+            "id": row["id"],
+            "video_id": row["video_id"],
+            "keyframe_n": row["keyframe_n"],
+            "image_filename": row["image_filename"],
+            "image_path": row["image_path"],
+            "pts_time": row["pts_time"],
+            "fps": row["fps"],
+            "frame_idx": row["frame_idx"],
+            "video_title": row["video_title"],
+            "video_author": row["video_author"],
+            "video_description": row["video_description"],
+            "video_length": row["video_length"],
+            "publish_date": row["publish_date"],
+            "watch_url": row["watch_url"],
+            "thumbnail_url": row["thumbnail_url"],
+            "similarity": dist,  # Higher is better for IP
+        })
+
+    # Sort by similarity (higher is better)
+    results.sort(key=lambda x: x["similarity"], reverse=True)
     return results[:top_k]
 
 # API Routes
+
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize models and indexes on startup"""
     print("Starting up Image Retrieval System...")
-    
+
     try:
         print("Loading CLIP model...")
         load_clip_model()
         print("✅ CLIP model loaded successfully")
-        
+
         print("Initializing translator...")
         initialize_translator()
         print("✅ Translator initialized successfully")
-        
+
         print("Building/Loading FAISS index...")
         build_faiss_index()
         print("✅ FAISS index ready")
-        
+
         print("🚀 Startup completed successfully!")
-        
+
     except Exception as e:
         print(f"❌ Startup failed: {e}")
         print("Please check your setup and try again.")
+
 
 @app.get("/")
 async def root():
     """Serve main page"""
     return FileResponse("static/index.html")
+
 
 @app.get("/health")
 async def health_check():
@@ -451,54 +350,55 @@ async def health_check():
         "translator_loaded": translator is not None,
     }
 
+
 @app.get("/test/frame/{frame_id}")
 async def test_frame(frame_id: int):
     """Simple test endpoint for frame data"""
     try:
         if not os.path.exists(DATABASE_FILE):
             return {"error": "Database not found"}
-        
+
         conn = get_db_connection()
         cursor = conn.cursor()
-        
-        cursor.execute("SELECT id, video_id, keyframe_n, image_filename FROM keyframe_embeddings WHERE id = ?", (frame_id,))
+
+        cursor.execute(
+            "SELECT id, video_id, keyframe_n, image_filename FROM keyframe_embeddings WHERE id = ?", (frame_id,))
         row = cursor.fetchone()
         conn.close()
-        
+
         if not row:
             return {"error": "Frame not found"}
-        
-        return {
-            "success": True,
-            "frame": dict(row)
-        }
+
+        return {"success": True, "frame": dict(row)}
     except Exception as e:
         return {"error": str(e)}
+
 
 @app.get("/debug/db")
 async def debug_database():
     """Debug database structure and sample data"""
     if not os.path.exists(DATABASE_FILE):
         return {"error": "Database file not found"}
-    
+
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        
+
         # Get table info
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
         tables = cursor.fetchall()
-        
+
         # Get sample frame data
-        cursor.execute("SELECT id, video_id, keyframe_n, image_filename FROM keyframe_embeddings LIMIT 5")
+        cursor.execute(
+            "SELECT id, video_id, keyframe_n, image_filename FROM keyframe_embeddings LIMIT 5")
         sample_frames = cursor.fetchall()
-        
+
         # Get total count
         cursor.execute("SELECT COUNT(*) FROM keyframe_embeddings")
         total_count = cursor.fetchone()[0]
-        
+
         conn.close()
-        
+
         return {
             "database_exists": True,
             "tables": [dict(t) for t in tables],
@@ -508,15 +408,17 @@ async def debug_database():
     except Exception as e:
         return {"error": f"Database error: {str(e)}"}
 
+
 @app.post("/search/text")
 async def search_by_text(
     query: str = Query(..., description="Text query"),
     top_k: int = Query(10, description="Number of results to return"),
-    video_id: Optional[str] = Query(None, description="Search within specific video(s). Use comma-separated values for multiple videos: 'video1,video2,video3'"),
+    video_id: Optional[str] = Query(
+        None, description="Search within specific video"),
     translate: bool = Query(
-        True, description="Auto-translate non-English queries to English"
-    ),
-    target_lang: str = Query("en", description="Target language for translation"),
+        True, description="Auto-translate non-English queries to English"),
+    target_lang: str = Query(
+        "en", description="Target language for translation"),
 ):
     """Search images by text query with optional translation"""
     if not query.strip():
@@ -532,10 +434,10 @@ async def search_by_text(
     try:
         # Encode text query
         text_embedding = encode_text(query)
-        
+
         # Search
         results = search_with_embedding(text_embedding, top_k, video_id)
-        
+
         return {
             "original_query": original_query,
             "query": query,
@@ -549,22 +451,22 @@ async def search_by_text(
         print(f"Error in text search: {e}")
         raise HTTPException(status_code=500, detail=f"Search error: {str(e)}")
 
+
 @app.post("/translate")
 async def translate_query(
     text: str = Query(..., description="Text to translate"),
     target_lang: str = Query(
-        "en", description="Target language code (e.g., 'en', 'vi', 'es')"
-    ),
+        "en", description="Target language code (e.g., 'en', 'vi', 'es')"),
     source_lang: str = Query(
-        "auto", description="Source language code or 'auto' for detection"
-    ),
+        "auto", description="Source language code or 'auto' for detection"),
 ):
     """Translate text to target language"""
     if not text.strip():
         raise HTTPException(status_code=400, detail="Text cannot be empty")
 
     try:
-        translated_text, was_translated = translate_text(text, target_lang, source_lang)
+        translated_text, was_translated = translate_text(
+            text, target_lang, source_lang)
 
         return {
             "original_text": text,
@@ -575,29 +477,32 @@ async def translate_query(
         }
     except Exception as e:
         print(f"Error in translation: {e}")
-        raise HTTPException(status_code=500, detail=f"Translation error: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Translation error: {str(e)}")
+
 
 @app.post("/search/image")
 async def search_by_image(
     file: UploadFile = File(...),
     top_k: int = Query(10, description="Number of results to return"),
-    video_id: Optional[str] = Query(None, description="Search within specific video(s). Use comma-separated values for multiple videos: 'video1,video2,video3'")
+    video_id: Optional[str] = Query(
+        None, description="Search within specific video")
 ):
     """Search images by uploaded image"""
     if not file.content_type.startswith('image/'):
         raise HTTPException(status_code=400, detail="File must be an image")
-    
+
     try:
         # Read and process image
         image_data = await file.read()
         image = Image.open(io.BytesIO(image_data)).convert('RGB')
-        
+
         # Encode image
         image_embedding = encode_image(image)
-        
+
         # Search
         results = search_with_embedding(image_embedding, top_k, video_id)
-        
+
         return {
             "filename": file.filename,
             "results": results,
@@ -606,82 +511,82 @@ async def search_by_image(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.get("/frame/{frame_id}")
 async def get_frame_metadata(frame_id: int):
     """Get metadata for a specific frame"""
     try:
         if not os.path.exists(DATABASE_FILE):
             raise HTTPException(status_code=500, detail="Database not found")
-            
+
         conn = get_db_connection()
         cursor = conn.cursor()
-        
-        cursor.execute("SELECT * FROM keyframe_embeddings WHERE id = ?", (frame_id,))
+
+        cursor.execute(
+            "SELECT * FROM keyframe_embeddings WHERE id = ?", (frame_id,))
         row = cursor.fetchone()
         conn.close()
-        
+
         if not row:
             raise HTTPException(status_code=404, detail="Frame not found")
-        
+
         # Convert to dict and exclude embedding data
         frame_dict = {}
         for key in row.keys():
-            if key != 'embedding':  # Skip embedding data
+            if key != 'embedding':
                 frame_dict[key] = row[key]
-        
-        print(f"Returning frame metadata for frame_id: {frame_id}")
+
         return frame_dict
-        
+
     except HTTPException as he:
         raise he
     except Exception as e:
         print(f"Error in get_frame_metadata: {e}")
-        raise HTTPException(status_code=500, detail=f"Error getting frame metadata: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Error getting frame metadata: {str(e)}")
+
 
 @app.get("/frames/surrounding/{frame_id}")
 async def get_surrounding_frames(
     frame_id: int,
-    window_size: int = Query(5, description="Number of frames before and after")
+    window_size: int = Query(
+        5, description="Number of frames before and after")
 ):
     """Get surrounding frames for a specific frame"""
     try:
         if not os.path.exists(DATABASE_FILE):
-            raise HTTPException(status_code=500, detail="Database not found. Please run migration script first.")
-        
+            raise HTTPException(status_code=500, detail="Database not found.")
+
         conn = get_db_connection()
         cursor = conn.cursor()
-        
-        print(f"Getting surrounding frames for frame_id: {frame_id}")
-        
+
         # Get the target frame
-        print(f"Querying database for frame_id: {frame_id}")
-        cursor.execute("SELECT * FROM keyframe_embeddings WHERE id = ?", (frame_id,))
+        cursor.execute(
+            "SELECT * FROM keyframe_embeddings WHERE id = ?", (frame_id,))
         target_frame = cursor.fetchone()
-        print(f"Target frame result: {target_frame is not None}")
-        
+
         if not target_frame:
             conn.close()
-            raise HTTPException(status_code=404, detail=f"Frame with ID {frame_id} not found")
-        
+            raise HTTPException(
+                status_code=404, detail=f"Frame with ID {frame_id} not found")
+
         video_id = target_frame['video_id']
         target_keyframe_n = target_frame['keyframe_n']
-        
-        print(f"Target frame: video_id={video_id}, keyframe_n={target_keyframe_n}")
-        
+
         # Get surrounding frames from the same video
         start_keyframe = max(1, target_keyframe_n - window_size)
         end_keyframe = target_keyframe_n + window_size
-        
+
         cursor.execute("""
             SELECT keyframe_n, image_filename, image_path, pts_time 
             FROM keyframe_embeddings 
             WHERE video_id = ? AND keyframe_n BETWEEN ? AND ?
             ORDER BY keyframe_n
         """, (video_id, start_keyframe, end_keyframe))
-        
+
         rows = cursor.fetchall()
         conn.close()
-        
+
         surrounding_frames = []
         for row in rows:
             frame_dict = {
@@ -692,30 +597,25 @@ async def get_surrounding_frames(
                 "is_current": (row['keyframe_n'] == target_keyframe_n)
             }
             surrounding_frames.append(frame_dict)
-        
-        # Convert target_frame to dict properly
+
+        # Convert target_frame to dict
         target_frame_dict = {}
         for key in target_frame.keys():
-            value = target_frame[key]
-            # Skip embedding data for response
             if key != 'embedding':
-                target_frame_dict[key] = value
-        
-        result = {
+                target_frame_dict[key] = target_frame[key]
+
+        return {
             "target_frame": target_frame_dict,
             "surrounding_frames": surrounding_frames
         }
-        
-        print(f"Returning {len(surrounding_frames)} surrounding frames")
-        return result
-        
+
     except HTTPException as he:
         raise he
     except Exception as e:
         print(f"Error in get_surrounding_frames: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Error getting surrounding frames: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Error getting surrounding frames: {str(e)}")
+
 
 @app.get("/video/{video_id}/frames")
 async def get_video_frames(video_id: str):
@@ -723,51 +623,54 @@ async def get_video_frames(video_id: str):
     try:
         if not os.path.exists(DATABASE_FILE):
             raise HTTPException(status_code=500, detail="Database not found")
-            
+
         conn = get_db_connection()
         cursor = conn.cursor()
-        
+
         cursor.execute("""
             SELECT id, video_id, keyframe_n, image_filename, image_path, pts_time, 
                    fps, frame_idx, video_title, video_author, video_description, 
-                   video_length, publish_date, watch_url, thumbnail_url, 
-                   channel_id, channel_url, created_at
+                   video_length, publish_date, watch_url, thumbnail_url
             FROM keyframe_embeddings 
             WHERE video_id = ? 
             ORDER BY keyframe_n
         """, (video_id,))
-        
+
         rows = cursor.fetchall()
         conn.close()
-        
+
         if not rows:
             raise HTTPException(status_code=404, detail="Video not found")
-        
+
         return [dict(row) for row in rows]
-        
+
     except HTTPException as he:
         raise he
     except Exception as e:
         print(f"Error in get_video_frames: {e}")
-        raise HTTPException(status_code=500, detail=f"Error getting video frames: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Error getting video frames: {str(e)}")
+
 
 @app.get("/stats")
 async def get_statistics():
     """Get database statistics"""
     conn = get_db_connection()
     cursor = conn.cursor()
-    
+
     cursor.execute("SELECT COUNT(*) as total_frames FROM keyframe_embeddings")
     total_frames = cursor.fetchone()['total_frames']
-    
-    cursor.execute("SELECT COUNT(DISTINCT video_id) as total_videos FROM keyframe_embeddings")
+
+    cursor.execute(
+        "SELECT COUNT(DISTINCT video_id) as total_videos FROM keyframe_embeddings")
     total_videos = cursor.fetchone()['total_videos']
-    
-    cursor.execute("SELECT video_id, COUNT(*) as frame_count FROM keyframe_embeddings GROUP BY video_id LIMIT 10")
+
+    cursor.execute(
+        "SELECT video_id, COUNT(*) as frame_count FROM keyframe_embeddings GROUP BY video_id LIMIT 10")
     top_videos = cursor.fetchall()
-    
+
     conn.close()
-    
+
     return {
         "total_frames": total_frames,
         "total_videos": total_videos,
@@ -776,7 +679,7 @@ async def get_statistics():
     }
 
 # Serve static files (images)
-app.mount("/images", StaticFiles(directory="backend/keyframes"), name="images")
+app.mount("/images", StaticFiles(directory="D:/keyframes"), name="images")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 if __name__ == "__main__":
