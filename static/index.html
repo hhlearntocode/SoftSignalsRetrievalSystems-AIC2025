@@ -123,36 +123,87 @@
                                     <option value="100">100 results</option>
                                 </select>
                             </div>
-                            <div class="col-md-3">
+                            <div class="col-md-2">
                                 <label class="form-label">Similarity Threshold:</label>
                                 <input type="number" id="similarityThreshold" class="form-control" 
                                        value="0.7" min="0" max="1" step="0.1" 
                                        placeholder="0.7">
                             </div>
-                            <div class="col-md-3">
+                            <div class="col-md-2">
                                 <label class="form-label">Score Threshold:</label>
                                 <input type="number" id="scoreThreshold" class="form-control" 
                                        value="0.6" min="0" max="1" step="0.1" 
                                        placeholder="0.6">
                             </div>
-                            <div class="col-md-4">
+                            <div class="col-md-2">
+                                <label class="form-label">Search Window:</label>
+                                <input type="number" id="searchWindow" class="form-control" 
+                                       value="300" min="50" max="1000" step="50" 
+                                       placeholder="300">
+                            </div>
+                            <div class="col-md-2">
+                                <label class="form-label">Max Gap:</label>
+                                <input type="number" id="maxTemporalGap" class="form-control" 
+                                       value="150" min="50" max="500" step="25" 
+                                       placeholder="150">
+                            </div>
+                            <div class="col-md-2">
                                 <label class="form-label">&nbsp;</label>
                                 <button onclick="performTRAKESequenceSearch()" class="btn btn-warning w-100">
-                                    <i class="fas fa-video me-1"></i>TRAKE Sequence Search
+                                    <i class="fas fa-video me-1"></i>Enhanced TRAKE
                                 </button>
+                            </div>
+                        </div>
+                        
+                        <!-- Advanced Configuration (Collapsible) -->
+                        <div class="mb-4">
+                            <button class="btn btn-outline-secondary btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#advancedConfig">
+                                <i class="fas fa-cog me-1"></i>Advanced Configuration
+                            </button>
+                            <div class="collapse mt-3" id="advancedConfig">
+                                <div class="card">
+                                    <div class="card-body">
+                                        <div class="row g-3">
+                                            <div class="col-md-3">
+                                                <label class="form-label">Min Completeness:</label>
+                                                <input type="number" id="minCompleteness" class="form-control" 
+                                                       value="0.6" min="0" max="1" step="0.1" 
+                                                       title="Minimum percentage of events that must be found">
+                                            </div>
+                                            <div class="col-md-3">
+                                                <label class="form-label">Temporal Weight:</label>
+                                                <input type="number" id="temporalWeight" class="form-control" 
+                                                       value="0.3" min="0" max="1" step="0.1" 
+                                                       title="Weight for temporal continuity in scoring">
+                                            </div>
+                                            <div class="col-md-3">
+                                                <label class="form-label">Completeness Weight:</label>
+                                                <input type="number" id="completenessWeight" class="form-control" 
+                                                       value="0.2" min="0" max="1" step="0.1" 
+                                                       title="Weight for sequence completeness in scoring">
+                                            </div>
+                                            <div class="col-md-3">
+                                                <label class="form-label">Early Stop Threshold:</label>
+                                                <input type="number" id="earlyStopThreshold" class="form-control" 
+                                                       value="0.3" min="0" max="1" step="0.1" 
+                                                       title="Minimum similarity to avoid early filtering">
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
 
                         <!-- Events Section -->
                         <div class="mb-3">
                             <div class="d-flex justify-content-between align-items-center mb-2">
-                                <h5>Events Sequence (3+ Events)</h5>
+                                <h5>Events Sequence (2+ Events)</h5>
                                 <div class="btn-group">
                                     <button class="btn btn-success btn-sm" onclick="addNewEventRow()" id="addEventButton">
                                         <i class="fas fa-plus me-1"></i>Add Event
                                     </button>
                                     <button class="btn btn-secondary btn-sm" onclick="initializeTRAKEEvents()" id="resetEventsButton">
-                                        <i class="fas fa-refresh me-1"></i>Reset to 3
+                                        <i class="fas fa-refresh me-1"></i>Reset Events
                                     </button>
                                 </div>
                             </div>
@@ -161,17 +212,33 @@
                             </div>
                         </div>
                         
-                        <!-- TRAKE Mode Indicator -->
+                        <!-- Enhanced TRAKE Algorithm Information -->
                         <div class="alert alert-info mt-3" role="alert">
                             <i class="fas fa-info-circle me-2"></i>
-                            <strong>TRAKE Sequence Search:</strong> 
-                            <ul class="mb-0 mt-2">
-                                <li>Enter 3 or more events in sequence order</li>
-                                <li>System will search across entire database to find matching event sequences</li>
-                                <li>Use "Add Event" to add more events, "Reset to 3" to return to default</li>
-                                <li>Adjust similarity threshold (how similar frames must be to events)</li>
-                                <li>Adjust score threshold (minimum score for sequence to be shown)</li>
-                            </ul>
+                            <strong>Enhanced TRAKE Sequence Search Algorithm:</strong> 
+                            <div class="row mt-2">
+                                <div class="col-md-6">
+                                    <h6>How it works:</h6>
+                                    <ul class="mb-2">
+                                        <li><strong>Enhanced Query Merging:</strong> Combines events with temporal markers</li>
+                                        <li><strong>Pivot-Based Discovery:</strong> Finds best matching frames as sequence anchors</li>
+                                        <li><strong>Windowed Search:</strong> Searches within configurable frame windows</li>
+                                        <li><strong>Multi-Component Scoring:</strong> Advanced scoring with temporal, completeness, and consistency factors</li>
+                                    </ul>
+                                </div>
+                                <div class="col-md-6">
+                                    <h6>Configuration Tips:</h6>
+                                    <ul class="mb-2">
+                                        <li><strong>Search Window:</strong> Frames to search around pivot (larger = more comprehensive)</li>
+                                        <li><strong>Max Gap:</strong> Maximum frames between consecutive events</li>
+                                        <li><strong>Similarity Threshold:</strong> Minimum frame-to-event similarity</li>
+                                        <li><strong>Score Threshold:</strong> Minimum final sequence score to display</li>
+                                    </ul>
+                                </div>
+                            </div>
+                            <p class="mb-0 mt-2"><small class="text-muted">
+                                <strong>Algorithm:</strong> Enhanced Temporal Search with Pivot Selection, Windowed Discovery, and Multi-Component Scoring (from alg.md specification)
+                            </small></p>
                         </div>
                     </div>
                 </div>

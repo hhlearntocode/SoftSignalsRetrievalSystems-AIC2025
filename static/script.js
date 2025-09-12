@@ -1034,7 +1034,7 @@ function checkAndInitializeTRAKEEvents() {
     }
 }
 
-// Initialize TRAKE events with 3 default rows
+// Initialize TRAKE events with default rows
 function initializeTRAKEEvents() {
     console.log('Initializing TRAKE events...');
     const container = document.getElementById('eventsContainer');
@@ -1047,7 +1047,7 @@ function initializeTRAKEEvents() {
     container.innerHTML = '';
     nextEventNumber = 1;
     
-    // Add 3 default event rows
+    // Add 3 default event rows (keeping 3 for better UX, even though algorithm needs minimum 2)
     for (let i = 1; i <= 3; i++) {
         console.log(`Adding event row ${i}`);
         addDynamicEventRow();
@@ -1123,11 +1123,11 @@ function updateRemoveButtons() {
     eventRows.forEach((row, index) => {
         const removeBtn = row.querySelector('.remove-event-btn');
         
-        if (eventRows.length <= 3) {
-            // Hide all remove buttons if we have 3 or fewer events
+        if (eventRows.length <= 2) {
+            // Hide all remove buttons if we have 2 or fewer events (minimum required)
             if (removeBtn) removeBtn.style.display = 'none';
         } else {
-            // Show remove buttons if we have more than 3 events
+            // Show remove buttons if we have more than 2 events
             if (removeBtn) {
                 removeBtn.style.display = 'inline-block';
             } else {
@@ -1169,85 +1169,198 @@ function getEventsData() {
     return events;
 }
 
-// Perform TRAKE Sequence Search
+// Enhanced temporal query merging function
+function createTemporalQuery(events) {
+    if (events.length === 1) {
+        return events[0].query;
+    }
+
+    let query = "temporal sequence: ";
+    for (let i = 0; i < events.length; i++) {
+        let prefix;
+        if (i === 0) {
+            prefix = "first";
+        } else if (i === events.length - 1) {
+            prefix = "finally";
+        } else {
+            const transitions = ["followed by", "then", "subsequently"];
+            prefix = transitions[i % 3];
+        }
+
+        query += prefix + " " + events[i].query;
+        if (i < events.length - 1) {
+            query += ", ";
+        }
+    }
+
+    return query;
+}
+
+// Configuration for the enhanced algorithm
+const algorithmConfig = {
+    similarityThreshold: 0.7,
+    scoreThreshold: 0.6,
+    topK: 100,
+    maxTemporalGap: 150,
+    searchWindow: 300,
+    minSequenceCompleteness: 0.6,
+    temporalWeight: 0.3,
+    completenessWeight: 0.2,
+    earlyStopThreshold: 0.3
+};
+
+// Perform Enhanced TRAKE Sequence Search
 async function performTRAKESequenceSearch() {
-    const topK = document.getElementById('trakeTopK').value;
+    const topK = parseInt(document.getElementById('trakeTopK').value);
     const similarityThreshold = parseFloat(document.getElementById('similarityThreshold').value);
     const scoreThreshold = parseFloat(document.getElementById('scoreThreshold').value);
+    const searchWindow = parseInt(document.getElementById('searchWindow').value);
+    const maxTemporalGap = parseInt(document.getElementById('maxTemporalGap').value);
     const events = getEventsData();
     
-    if (events.length < 3) {
-        showError('Please enter descriptions for at least 3 events');
+    // Update config with all UI values (including advanced ones if available)
+    algorithmConfig.topK = topK;
+    algorithmConfig.similarityThreshold = similarityThreshold;
+    algorithmConfig.scoreThreshold = scoreThreshold;
+    algorithmConfig.searchWindow = searchWindow;
+    algorithmConfig.maxTemporalGap = maxTemporalGap;
+    
+    // Advanced configuration (if elements exist)
+    const minCompletenessEl = document.getElementById('minCompleteness');
+    const temporalWeightEl = document.getElementById('temporalWeight');
+    const completenessWeightEl = document.getElementById('completenessWeight');
+    const earlyStopThresholdEl = document.getElementById('earlyStopThreshold');
+    
+    if (minCompletenessEl) algorithmConfig.minSequenceCompleteness = parseFloat(minCompletenessEl.value);
+    if (temporalWeightEl) algorithmConfig.temporalWeight = parseFloat(temporalWeightEl.value);
+    if (completenessWeightEl) algorithmConfig.completenessWeight = parseFloat(completenessWeightEl.value);
+    if (earlyStopThresholdEl) algorithmConfig.earlyStopThreshold = parseFloat(earlyStopThresholdEl.value);
+    
+    console.log('Enhanced TRAKE Config:', algorithmConfig);
+    
+    if (events.length < 2) {
+        showError('Please enter descriptions for at least 2 events');
         return;
     }
     
     showLoading(true);
     
     try {
-        // Step 1: Merge all queries into one combined query
-        const mergedQuery = events.map(event => event.query).join('. ');
-        console.log('Merged query:', mergedQuery);
+        console.log('Starting Enhanced TRAKE Algorithm...');
         
-        // Step 2: Get initial search results from entire database
-        const params = new URLSearchParams({
-            query: mergedQuery,
-            top_k: topK
-            // No video_id - search across entire database
-        });
+        // Phase 1: Enhanced Initial Search with early filtering
+        console.log('Phase 1: Enhanced Initial Search');
+        const candidates = await performInitialSearch(events);
         
-        const response = await fetch(`/search/text?${params.toString()}`, {
-            method: 'POST'
-        });
+        if (!candidates || candidates.length === 0) {
+            throw new Error('No candidates found after initial search and filtering');
+        }
+        console.log(`Found ${candidates.length} candidates after filtering`);
         
-        const data = await response.json();
+        // Phase 2: Sequence Discovery with pivot selection
+        console.log('Phase 2: Sequence Discovery');
+        const sequences = await discoverSequences(events, candidates);
+        console.log(`Discovered ${sequences.length} valid sequences`);
         
-        if (!response.ok) {
-            throw new Error(data.detail || 'Search failed');
+        // Phase 3: Advanced Scoring and Results
+        console.log('Phase 3: Advanced Scoring and Ranking');
+        const results = await scoreAndRankSequences(sequences, events);
+        console.log(`Final results: ${results.length} sequences passed score threshold`);
+        
+        // Display enhanced results
+        displayEnhancedSequenceResults(results, events);
+        
+        // Show success message with algorithm info
+        if (results.length > 0) {
+            const avgScore = results.reduce((sum, r) => sum + r.score, 0) / results.length;
+            console.log(`Average score: ${(avgScore * 100).toFixed(1)}%`);
         }
         
-        // Step 3: Process results to find event sequences
-        const sequences = await findEventSequences(data.results, events, similarityThreshold, scoreThreshold);
-        
-        // Step 4: Display sequence results
-        displaySequenceResults(sequences, events);
-        
     } catch (error) {
-        console.error('Error in TRAKE sequence search:', error);
-        showError('TRAKE sequence search failed: ' + error.message);
+        console.error('Error in Enhanced TRAKE sequence search:', error);
+        showError('Enhanced TRAKE search failed: ' + error.message);
     } finally {
         showLoading(false);
     }
 }
 
-// Find event sequences in search results
-async function findEventSequences(searchResults, events, similarityThreshold, scoreThreshold) {
-    const sequences = [];
+// Phase 1: Enhanced Initial Search
+async function performInitialSearch(events) {
+    const mergedQuery = createTemporalQuery(events);
+    console.log('Enhanced merged query:', mergedQuery);
     
-    // Use all search results as potential pivots for each event position
-    for (const result of searchResults) {
-        // Try this result as pivot for each possible event position
-        for (let eventIndex = 0; eventIndex < events.length; eventIndex++) {
-            // Build sequence around this result as pivot for eventIndex
-            const sequence = await buildSequenceAroundPivot(result, { eventIndex: eventIndex, similarity: result.similarity }, events, similarityThreshold);
-            
-            if (sequence && sequence.frames.length === events.length) {
-                // Calculate final score with new algorithm
-                const finalScore = calculateNewSequenceScore(sequence, events);
-                
-                if (finalScore >= scoreThreshold) {
-                    sequence.score = finalScore;
-                    sequences.push(sequence);
-                }
-            }
+    // Search with higher top-K to allow early filtering
+    const params = new URLSearchParams({
+        query: mergedQuery,
+        top_k: algorithmConfig.topK * 2  // Get more candidates for filtering
+    });
+    
+    const response = await fetch(`/search/text?${params.toString()}`, {
+        method: 'POST'
+    });
+    
+    const data = await response.json();
+    
+    if (!response.ok) {
+        throw new Error(data.detail || 'Search failed');
+    }
+    
+    // Early filtering to remove very weak candidates
+    const filteredCandidates = data.results.filter(candidate => 
+        candidate.similarity >= algorithmConfig.earlyStopThreshold
+    );
+    
+    // Return top-K after filtering
+    return filteredCandidates.slice(0, algorithmConfig.topK);
+}
+
+// Phase 2: Sequence Discovery
+async function discoverSequences(events, candidates) {
+    const validSequences = [];
+    
+    for (const candidate of candidates) {
+        // Find which event this candidate best matches (pivot)
+        const bestPivot = await findBestPivot(candidate, events);
+        
+        if (bestPivot.similarity < algorithmConfig.similarityThreshold) {
+            continue;
+        }
+        
+        // Build complete sequence around this pivot
+        const sequence = await buildSequenceAroundPivot(candidate, bestPivot.eventIndex, events);
+        
+        if (isSequenceValid(sequence, events)) {
+            validSequences.push(sequence);
         }
     }
     
-    // Sort sequences by score
-    sequences.sort((a, b) => b.score - a.score);
-    
-    return sequences;
+    return validSequences;
 }
 
+
+// Find best pivot for a candidate frame
+async function findBestPivot(candidate, events) {
+    let bestMatch = null;
+    let bestSimilarity = 0;
+    let bestEventIndex = -1;
+    
+    for (let i = 0; i < events.length; i++) {
+        const event = events[i];
+        const similarity = await calculateFrameEventSimilarity(candidate, event.query);
+        
+        if (similarity > bestSimilarity) {
+            bestSimilarity = similarity;
+            bestEventIndex = i;
+            bestMatch = candidate;
+        }
+    }
+    
+    return {
+        match: bestMatch,
+        similarity: bestSimilarity,
+        eventIndex: bestEventIndex
+    };
+}
 
 // Calculate similarity between frame and event (simplified)
 async function calculateFrameEventSimilarity(frame, eventQuery) {
@@ -1259,70 +1372,113 @@ async function calculateFrameEventSimilarity(frame, eventQuery) {
     return Math.min(frame.similarity + (Math.random() - 0.5) * 0.2, 1.0);
 }
 
-// Build sequence around pivot frame
-async function buildSequenceAroundPivot(pivotFrame, pivotEvent, events, similarityThreshold) {
-    const sequence = {
-        pivotFrame: pivotFrame,
-        pivotEventIndex: pivotEvent.eventIndex,
-        frames: new Array(events.length).fill(null)
-    };
+// Enhanced sequence building around pivot with windowed search
+async function buildSequenceAroundPivot(pivotFrame, pivotEventIndex, events) {
+    const sequence = new Array(events.length).fill(null);
     
     // Place pivot frame
-    sequence.frames[pivotEvent.eventIndex] = {
+    sequence[pivotEventIndex] = {
         frame: pivotFrame,
-        eventIndex: pivotEvent.eventIndex,
-        similarity: pivotEvent.similarity,
+        similarity: pivotFrame.similarity,
+        frameIndex: pivotFrame.frame_idx,
+        videoId: pivotFrame.video_id,
         isPivot: true
     };
     
-    // Get all frames from the same video as pivot
-    const videoFrames = await getVideoFrames(pivotFrame.video_id);
+    // Define search window around pivot
+    const searchWindow = algorithmConfig.searchWindow;
+    const minFrame = Math.max(0, pivotFrame.frame_idx - searchWindow);
+    const maxFrame = pivotFrame.frame_idx + searchWindow;
     
-    // Find frames for events before pivot
-    for (let i = pivotEvent.eventIndex - 1; i >= 0; i--) {
-        const targetFrame = await findBestFrameForEvent(
-            videoFrames,
-            events[i],
-            pivotFrame.frame_idx,
-            'before',
-            similarityThreshold
+    // Search backwards for earlier events
+    for (let eventIdx = pivotEventIndex - 1; eventIdx >= 0; eventIdx--) {
+        const targetRange = {
+            start: minFrame,
+            end: pivotFrame.frame_idx - 1
+        };
+        
+        const bestMatch = await findBestFrameInRange(
+            events[eventIdx],
+            pivotFrame.video_id,
+            targetRange
         );
         
-        if (targetFrame) {
-            sequence.frames[i] = {
-                frame: targetFrame,
-                eventIndex: i,
-                similarity: targetFrame.similarity,
-                isPivot: false
-            };
-        } else {
-            return null; // Sequence incomplete
+        if (bestMatch && bestMatch.similarity >= algorithmConfig.similarityThreshold) {
+            sequence[eventIdx] = bestMatch;
         }
     }
     
-    // Find frames for events after pivot
-    for (let i = pivotEvent.eventIndex + 1; i < events.length; i++) {
-        const targetFrame = await findBestFrameForEvent(
-            videoFrames,
-            events[i],
-            pivotFrame.frame_idx,
-            'after',
-            similarityThreshold
+    // Search forwards for later events
+    for (let eventIdx = pivotEventIndex + 1; eventIdx < events.length; eventIdx++) {
+        const targetRange = {
+            start: pivotFrame.frame_idx + 1,
+            end: maxFrame
+        };
+        
+        const bestMatch = await findBestFrameInRange(
+            events[eventIdx],
+            pivotFrame.video_id,
+            targetRange
         );
         
-        if (targetFrame) {
-            sequence.frames[i] = {
-                frame: targetFrame,
-                eventIndex: i,
-                similarity: targetFrame.similarity,
-                isPivot: false
-            };
-        } else {
-            return null; // Sequence incomplete
+        if (bestMatch && bestMatch.similarity >= algorithmConfig.similarityThreshold) {
+            sequence[eventIdx] = bestMatch;
         }
     }
     
-    return sequence;
+    // Return only non-null frames
+    return sequence.filter(frame => frame !== null);
+}
+
+// Find best frame for event within specified range
+async function findBestFrameInRange(event, videoId, frameRange) {
+    // Get video frames in the specified range
+    const videoFrames = await getVideoFrames(videoId);
+    const candidates = videoFrames.filter(frame => 
+        frame.frame_idx >= frameRange.start && 
+        frame.frame_idx <= frameRange.end
+    );
+    
+    let bestMatch = null;
+    let bestSimilarity = 0;
+    
+    for (const candidate of candidates) {
+        const similarity = await calculateFrameEventSimilarity(candidate, event.query);
+        if (similarity > bestSimilarity) {
+            bestSimilarity = similarity;
+            bestMatch = {
+                frame: candidate,
+                similarity: similarity,
+                frameIndex: candidate.frame_idx,
+                videoId: candidate.video_id,
+                isPivot: false
+            };
+        }
+    }
+    
+    return bestMatch;
+}
+
+// Check if sequence is valid according to algorithm requirements
+function isSequenceValid(sequence, events) {
+    if (!sequence || sequence.length === 0) {
+        return false;
+    }
+    
+    // Check minimum completeness requirement
+    const completeness = sequence.length / events.length;
+    if (completeness < algorithmConfig.minSequenceCompleteness) {
+        return false;
+    }
+    
+    // Check temporal ordering
+    for (let i = 1; i < sequence.length; i++) {
+        if (sequence[i].frameIndex <= sequence[i-1].frameIndex) {
+            return false; // Not in temporal order
+        }
+    }
+    
+    return true;
 }
 
 // Get all frames from a video
@@ -1359,31 +1515,105 @@ async function findBestFrameForEvent(videoFrames, event, pivotFrameIdx, directio
     return bestFrame;
 }
 
-// Calculate final score for sequence with new algorithm
-function calculateNewSequenceScore(sequence, events) {
-    // Step 1: Get all similarities from frames
-    const similarities = sequence.frames
-        .filter(frameData => frameData !== null)
-        .map(frameData => frameData.similarity);
+// Phase 3: Advanced Scoring and Ranking
+async function scoreAndRankSequences(sequences, events) {
+    const results = [];
     
-    if (similarities.length === 0) return 0;
-    
-    // Step 2: Calculate average similarity
-    const averageSimilarity = similarities.reduce((sum, sim) => sum + sim, 0) / similarities.length;
-    
-    // Step 3: Compare each similarity with average, +1 if higher, +0 if lower
-    let totalPoints = 0;
-    for (const similarity of similarities) {
-        if (similarity > averageSimilarity) {
-            totalPoints += 1;
+    for (const sequence of sequences) {
+        const scoreResult = calculateEnhancedSequenceScore(sequence, events);
+        
+        if (scoreResult.finalScore >= algorithmConfig.scoreThreshold) {
+            results.push({
+                sequence: sequence,
+                score: scoreResult.finalScore,
+                scoreBreakdown: scoreResult.breakdown,
+                metadata: {
+                    videoId: sequence.length > 0 ? sequence[0].videoId : null,
+                    startFrame: Math.min(...sequence.map(frame => frame.frameIndex)),
+                    endFrame: Math.max(...sequence.map(frame => frame.frameIndex)),
+                    duration: Math.max(...sequence.map(frame => frame.frameIndex)) - 
+                             Math.min(...sequence.map(frame => frame.frameIndex)),
+                    completeness: sequence.length / events.length
+                }
+            });
         }
-        // If similarity <= averageSimilarity, add 0 (no points)
     }
     
-    // Step 4: Final score = total points / number of events
-    const finalScore = totalPoints / events.length;
+    // Sort by score descending
+    results.sort((a, b) => b.score - a.score);
+    return results;
+}
+
+// Enhanced scoring system with multiple components
+function calculateEnhancedSequenceScore(sequence, events) {
+    if (sequence.length === 0) {
+        return { finalScore: 0, breakdown: {} };
+    }
     
-    return finalScore;
+    const similarities = sequence.map(frame => frame.similarity);
+    
+    // 1. Base similarity score (average)
+    const baseSimilarityScore = similarities.reduce((sum, sim) => sum + sim, 0) / similarities.length;
+    
+    // 2. Temporal continuity score
+    let temporalScore = 1.0;
+    if (sequence.length > 1) {
+        let totalGapPenalty = 0;
+        for (let i = 1; i < sequence.length; i++) {
+            const gap = sequence[i].frameIndex - sequence[i-1].frameIndex;
+            const normalizedGap = Math.min(gap / algorithmConfig.maxTemporalGap, 1.0);
+            totalGapPenalty += normalizedGap;
+        }
+        temporalScore = Math.max(0, 1 - (totalGapPenalty / (sequence.length - 1)));
+    }
+    
+    // 3. Completeness score
+    const completeness = sequence.length / events.length;
+    const completenessScore = completeness >= algorithmConfig.minSequenceCompleteness 
+        ? completeness 
+        : completeness * 0.5;
+    
+    // 4. Consistency bonus (reward consistent similarities)
+    const variance = calculateVariance(similarities);
+    const consistencyBonus = Math.max(0, 1 - variance);
+    
+    // 5. Sequential order bonus
+    let correctOrderCount = 0;
+    for (let i = 1; i < sequence.length; i++) {
+        if (sequence[i].frameIndex > sequence[i-1].frameIndex) {
+            correctOrderCount += 1;
+        }
+    }
+    const orderBonus = sequence.length > 1 ? correctOrderCount / (sequence.length - 1) : 1;
+    
+    // Final weighted score
+    const finalScore = (
+        baseSimilarityScore * 0.4 +
+        temporalScore * algorithmConfig.temporalWeight +
+        completenessScore * algorithmConfig.completenessWeight +
+        consistencyBonus * 0.1 +
+        orderBonus * 0.1
+    );
+    
+    return {
+        finalScore: finalScore,
+        breakdown: {
+            baseSimilarity: baseSimilarityScore,
+            temporal: temporalScore,
+            completeness: completenessScore,
+            consistency: consistencyBonus,
+            order: orderBonus
+        }
+    };
+}
+
+// Calculate variance of similarities
+function calculateVariance(similarities) {
+    if (similarities.length === 0) return 0;
+    
+    const mean = similarities.reduce((sum, sim) => sum + sim, 0) / similarities.length;
+    const variance = similarities.reduce((sum, sim) => sum + Math.pow(sim - mean, 2), 0) / similarities.length;
+    return Math.sqrt(variance);
 }
 
 // Legacy scoring function (keep for compatibility)
@@ -1395,16 +1625,16 @@ function calculateSequenceScore(sequence, events) {
     return totalSimilarity / events.length;
 }
 
-// Display sequence search results
-function displaySequenceResults(sequences, events) {
+// Enhanced display for sequence results
+function displayEnhancedSequenceResults(results, events) {
     const resultsDiv = document.getElementById('searchResults');
     currentSearchResults = []; // Clear for CSV export
     
     // Store sequences and events globally
-    allSequences = sequences;
+    allSequences = results;
     currentEvents = events;
     
-    if (!sequences || sequences.length === 0) {
+    if (!results || results.length === 0) {
         resultsDiv.innerHTML = `
             <div class="text-center text-muted py-5">
                 <i class="fas fa-search fa-3x mb-3"></i>
@@ -1417,41 +1647,71 @@ function displaySequenceResults(sequences, events) {
     
     let html = `
         <div class="d-flex justify-content-between align-items-center mb-4">
-            <h4>TRAKE Sequence Results</h4>
+            <h4>Enhanced TRAKE Sequence Results</h4>
             <div class="text-muted">
                 <i class="fas fa-info-circle me-1"></i>
-                Found ${sequences.length} sequences
+                Found ${results.length} sequences
             </div>
         </div>
     `;
     
-    sequences.forEach((sequence, index) => {
+    results.forEach((result, index) => {
+        const sequence = result.sequence;
+        const breakdown = result.scoreBreakdown;
+        const metadata = result.metadata;
+        
         html += `
-            <div class="sequence-result">
+            <div class="sequence-result enhanced">
                 <div class="d-flex justify-content-between align-items-center mb-3">
                     <h5>Sequence ${index + 1}</h5>
-                    <span class="sequence-score">Score: ${(sequence.score * 100).toFixed(1)}%</span>
+                    <div class="score-info">
+                        <span class="sequence-score">Score: ${(result.score * 100).toFixed(1)}%</span>
+                        <small class="text-muted ms-2">
+                            (Sim: ${(breakdown.baseSimilarity * 100).toFixed(0)}%, 
+                             Temp: ${(breakdown.temporal * 100).toFixed(0)}%, 
+                             Comp: ${(breakdown.completeness * 100).toFixed(0)}%)
+                        </small>
+                    </div>
                 </div>
+                
+                <div class="sequence-metadata mb-3">
+                    <small class="text-muted">
+                        Video: ${metadata.videoId} | 
+                        Frames: ${metadata.startFrame}-${metadata.endFrame} | 
+                        Duration: ${metadata.duration} frames | 
+                        Completeness: ${(metadata.completeness * 100).toFixed(0)}%
+                    </small>
+                </div>
+                
                 <div class="sequence-frames">
         `;
         
-        sequence.frames.forEach((frameData, eventIndex) => {
-            if (frameData) {
-                const imagePath = `/images/${frameData.frame.video_id}/${frameData.frame.image_filename}`;
-                const pivotClass = frameData.isPivot ? 'pivot' : '';
-                
-                html += `
-                    <div class="sequence-frame ${pivotClass}" onclick="openSequenceFrameByIndex(${index})">
-                        <img src="${imagePath}" alt="Event ${eventIndex + 1}">
-                        <div class="small mt-1">
-                            <div>Frame ${frameData.frame.keyframe_n}</div>
-                            <div class="event-label">Event ${eventIndex + 1}</div>
-                            <div class="text-muted">${(frameData.similarity * 100).toFixed(1)}%</div>
-                        </div>
+        sequence.forEach((frameData, frameIndex) => {
+            // Add safety checks
+            if (!frameData || !frameData.frame) {
+                console.warn('Invalid frame data at index:', frameIndex);
+                return;
+            }
+            
+            const imagePath = `/images/${frameData.videoId || frameData.frame.video_id}/${frameData.frame.image_filename}`;
+            const pivotClass = frameData.isPivot ? 'pivot' : '';
+            const frameNumber = frameData.frame.keyframe_n || frameData.frame.frame_idx || frameIndex;
+            const similarity = frameData.similarity || 0;
+            
+            html += `
+                <div class="sequence-frame ${pivotClass}" onclick="openEnhancedSequenceFrame(${index})">
+                    <img src="${imagePath}" alt="Event ${frameIndex + 1}" onerror="this.src='/static/placeholder.jpg'">
+                    <div class="small mt-1">
+                        <div>Frame ${frameNumber}</div>
+                        <div class="event-label">Event ${frameIndex + 1}</div>
+                        <div class="text-muted">${(similarity * 100).toFixed(1)}%</div>
+                        ${frameData.isPivot ? '<div class="pivot-label">PIVOT</div>' : ''}
                     </div>
-                `;
-                
-                // Add to results for CSV export
+                </div>
+            `;
+            
+            // Add to results for CSV export
+            if (frameData.frame) {
                 currentSearchResults.push(frameData.frame);
             }
         });
@@ -1465,73 +1725,93 @@ function displaySequenceResults(sequences, events) {
     resultsDiv.innerHTML = html;
 }
 
-// Open sequence frame by index
-function openSequenceFrameByIndex(sequenceIndex) {
-    if (sequenceIndex >= 0 && sequenceIndex < allSequences.length) {
-        const sequence = allSequences[sequenceIndex];
-        openSequenceFrame(sequence, currentEvents);
+// Open enhanced sequence frame viewer
+function openEnhancedSequenceFrame(resultIndex) {
+    if (resultIndex >= 0 && resultIndex < allSequences.length) {
+        const result = allSequences[resultIndex];
+        openSequenceFrameEnhanced(result, currentEvents);
     }
 }
 
-// Open sequence frame in new sequence viewer
-function openSequenceFrame(sequence, events) {
-    currentSequence = sequence;
+// Enhanced sequence frame viewer
+function openSequenceFrameEnhanced(result, events) {
+    currentSequence = result;
     
-    displaySequenceViewer(sequence, events);
+    displayEnhancedSequenceViewer(result, events);
     const modal = new bootstrap.Modal(document.getElementById('sequenceModal'));
     modal.show();
 }
 
-// Display sequence viewer modal
-function displaySequenceViewer(sequence, events) {
+// Enhanced sequence viewer modal display
+function displayEnhancedSequenceViewer(result, events) {
     const viewer = document.getElementById('sequenceViewer');
+    const sequence = result.sequence;
+    const breakdown = result.scoreBreakdown;
+    const metadata = result.metadata;
     
     let html = `
         <div class="row mb-4">
             <div class="col-12">
                 <div class="d-flex justify-content-between align-items-center">
-                    <h5>Event Sequence</h5>
-                    <span class="sequence-score">Score: ${(sequence.score * 100).toFixed(1)}%</span>
+                    <h5>Enhanced Event Sequence</h5>
+                    <span class="sequence-score">Score: ${(result.score * 100).toFixed(1)}%</span>
                 </div>
-                <div class="text-muted small">Video: ${sequence.frames[0]?.frame.video_id}</div>
+                <div class="text-muted small">
+                    Video: ${metadata.videoId} | 
+                    Frames: ${metadata.startFrame}-${metadata.endFrame} | 
+                    Duration: ${metadata.duration} frames
+                </div>
+            </div>
+        </div>
+        
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="score-breakdown">
+                    <h6>Score Breakdown:</h6>
+                    <div class="row">
+                        <div class="col">Base Similarity: ${(breakdown.baseSimilarity * 100).toFixed(1)}%</div>
+                        <div class="col">Temporal: ${(breakdown.temporal * 100).toFixed(1)}%</div>
+                        <div class="col">Completeness: ${(breakdown.completeness * 100).toFixed(1)}%</div>
+                        <div class="col">Consistency: ${(breakdown.consistency * 100).toFixed(1)}%</div>
+                        <div class="col">Order: ${(breakdown.order * 100).toFixed(1)}%</div>
+                    </div>
+                </div>
             </div>
         </div>
         
         <div class="row g-4">
     `;
     
-    sequence.frames.forEach((frameData, index) => {
-        if (frameData) {
-            const imagePath = `/images/${frameData.frame.video_id}/${frameData.frame.image_filename}`;
-            const pivotClass = frameData.isPivot ? 'border-danger border-3' : 'border-success border-2';
-            
-            html += `
-                <div class="col-md-4">
-                    <div class="text-center">
-                        <div class="mb-2">
-                            <span class="badge bg-primary">Event ${index + 1}</span>
-                            ${frameData.isPivot ? '<span class="badge bg-danger ms-1">Pivot</span>' : ''}
-                        </div>
-                        <img src="${imagePath}" 
-                             class="img-fluid rounded ${pivotClass}" 
-                             style="max-height: 300px; cursor: pointer;"
-                             onclick="openFrameViewer(${frameData.frame.id})"
-                             alt="Event ${index + 1}">
-                        <div class="mt-2">
-                            <div class="fw-bold">Frame ${frameData.frame.keyframe_n}</div>
-                            <div class="text-muted small">${formatTime(frameData.frame.pts_time)}</div>
-                            <div class="text-success small">Similarity: ${(frameData.similarity * 100).toFixed(1)}%</div>
-                        </div>
-                        <div class="mt-2">
-                            <div class="small text-muted">
-                                <strong>Event Description:</strong><br>
-                                ${events[index]?.query || 'N/A'}
-                            </div>
+    sequence.forEach((frameData, index) => {
+        const imagePath = `/images/${frameData.videoId}/${frameData.frame.image_filename}`;
+        const pivotClass = frameData.isPivot ? 'border-danger border-3' : 'border-success border-2';
+        
+        html += `
+            <div class="col-md-4">
+                <div class="text-center">
+                    <div class="mb-2">
+                        <span class="badge bg-primary">Event ${index + 1}</span>
+                        ${frameData.isPivot ? '<span class="badge bg-danger ms-1">Pivot</span>' : ''}
+                    </div>
+                    <img src="${imagePath}" 
+                         class="img-fluid rounded ${pivotClass}" 
+                         style="max-height: 300px; cursor: pointer;"
+                         onclick="openFrameViewer(${frameData.frame.id})"
+                         alt="Event ${index + 1}">
+                    <div class="mt-2">
+                        <div class="fw-bold">Frame ${frameData.frame.keyframe_n}</div>
+                        <div class="text-muted small">${formatTime(frameData.frame.pts_time)}</div>
+                        <div class="text-success small">Similarity: ${(frameData.similarity * 100).toFixed(1)}%</div>
+                    </div>
+                    <div class="mt-2">
+                        <div class="small text-muted">
+                            <strong>Event Description:</strong><br>
+                            ${events[index]?.query || 'N/A'}
                         </div>
                     </div>
                 </div>
-            `;
-        }
+            </div>
+        `;
     });
     
     html += `
@@ -1539,12 +1819,13 @@ function displaySequenceViewer(sequence, events) {
         <div class="row mt-4">
             <div class="col-12">
                 <div class="alert alert-info">
-                    <h6><i class="fas fa-info-circle me-2"></i>Sequence Information:</h6>
+                    <h6><i class="fas fa-info-circle me-2"></i>Enhanced Sequence Information:</h6>
                     <ul class="mb-0">
-                        <li><strong>Video ID:</strong> ${sequence.frames[0]?.frame.video_id}</li>
-                        <li><strong>Frame Range:</strong> ${Math.min(...sequence.frames.map(f => f?.frame.keyframe_n || 0))} - ${Math.max(...sequence.frames.map(f => f?.frame.keyframe_n || 0))}</li>
-                        <li><strong>Pivot Event:</strong> Event ${sequence.pivotEventIndex + 1}</li>
-                        <li><strong>Final Score:</strong> ${(sequence.score * 100).toFixed(1)}%</li>
+                        <li><strong>Video ID:</strong> ${metadata.videoId}</li>
+                        <li><strong>Frame Range:</strong> ${metadata.startFrame} - ${metadata.endFrame}</li>
+                        <li><strong>Duration:</strong> ${metadata.duration} frames</li>
+                        <li><strong>Completeness:</strong> ${(metadata.completeness * 100).toFixed(1)}%</li>
+                        <li><strong>Final Score:</strong> ${(result.score * 100).toFixed(1)}%</li>
                     </ul>
                 </div>
             </div>
@@ -1554,18 +1835,124 @@ function displaySequenceViewer(sequence, events) {
     viewer.innerHTML = html;
 }
 
-// Export sequence to CSV
+// Open sequence frame by index (legacy compatibility)
+function openSequenceFrameByIndex(sequenceIndex) {
+    if (sequenceIndex >= 0 && sequenceIndex < allSequences.length) {
+        const result = allSequences[sequenceIndex];
+        // Check if it's the new enhanced format or legacy format
+        if (result.sequence && result.scoreBreakdown) {
+            // New enhanced format
+            openSequenceFrameEnhanced(result, currentEvents);
+        } else {
+            // Legacy format - convert to enhanced format
+            const legacyResult = {
+                sequence: result.frames ? result.frames : result,
+                score: result.score || 0,
+                scoreBreakdown: {
+                    baseSimilarity: 0.8,
+                    temporal: 0.8,
+                    completeness: 1.0,
+                    consistency: 0.8,
+                    order: 1.0
+                },
+                metadata: {
+                    videoId: result.frames ? result.frames[0]?.frame?.video_id : 'unknown',
+                    startFrame: 0,
+                    endFrame: 100,
+                    duration: 100,
+                    completeness: 1.0
+                }
+            };
+            openSequenceFrameEnhanced(legacyResult, currentEvents);
+        }
+    }
+}
+
+// Legacy function kept for compatibility
+function openSequenceFrame(sequence, events) {
+    // Convert legacy format to enhanced format
+    const enhancedResult = {
+        sequence: sequence.frames || sequence,
+        score: sequence.score || 0,
+        scoreBreakdown: {
+            baseSimilarity: 0.8,
+            temporal: 0.8,
+            completeness: 1.0,
+            consistency: 0.8,
+            order: 1.0
+        },
+        metadata: {
+            videoId: sequence.frames ? sequence.frames[0]?.frame?.video_id : 'unknown',
+            startFrame: 0,
+            endFrame: 100,
+            duration: 100,
+            completeness: 1.0
+        }
+    };
+    
+    currentSequence = enhancedResult;
+    displayEnhancedSequenceViewer(enhancedResult, events);
+    const modal = new bootstrap.Modal(document.getElementById('sequenceModal'));
+    modal.show();
+}
+
+// Legacy display sequence viewer (converted to use enhanced viewer)
+function displaySequenceViewer(sequence, events) {
+    // Convert legacy format to enhanced format and use the enhanced viewer
+    const enhancedResult = {
+        sequence: sequence.frames || sequence,
+        score: sequence.score || 0,
+        scoreBreakdown: {
+            baseSimilarity: 0.8,
+            temporal: 0.8,
+            completeness: 1.0,
+            consistency: 0.8,
+            order: 1.0
+        },
+        metadata: {
+            videoId: sequence.frames ? sequence.frames[0]?.frame?.video_id : 'unknown',
+            startFrame: 0,
+            endFrame: 100,
+            duration: 100,
+            completeness: 1.0
+        }
+    };
+    
+    displayEnhancedSequenceViewer(enhancedResult, events);
+}
+
+// Export sequence to CSV (enhanced version)
 function exportSequenceCSV() {
     if (!currentSequence) {
         showError('No sequence to export');
         return;
     }
     
-    // Get video ID and frame numbers
-    const videoId = currentSequence.frames[0]?.frame.video_id;
-    const frameNumbers = currentSequence.frames
-        .filter(frameData => frameData !== null)
-        .map(frameData => frameData.frame.keyframe_n);
+    let videoId, frameNumbers;
+    
+    // Handle both enhanced and legacy format
+    if (currentSequence.sequence && Array.isArray(currentSequence.sequence)) {
+        // Enhanced format
+        const sequence = currentSequence.sequence;
+        videoId = currentSequence.metadata?.videoId || sequence[0]?.videoId || 'unknown';
+        frameNumbers = sequence
+            .filter(frameData => frameData !== null)
+            .map(frameData => frameData.frame ? frameData.frame.keyframe_n : frameData.frameIndex);
+    } else if (currentSequence.frames) {
+        // Legacy format
+        videoId = currentSequence.frames[0]?.frame?.video_id || 'unknown';
+        frameNumbers = currentSequence.frames
+            .filter(frameData => frameData !== null)
+            .map(frameData => frameData.frame.keyframe_n);
+    } else {
+        showError('Invalid sequence format for export');
+        return;
+    }
+    
+    if (!frameNumbers || frameNumbers.length === 0) {
+        showError('No frame numbers found to export');
+        return;
+    }
     
     // Create CSV content: videoID,frame1,frame2,frame3
     const csvContent = `${videoId},${frameNumbers.join(',')}`;
@@ -1583,7 +1970,7 @@ function exportSequenceCSV() {
     link.click();
     document.body.removeChild(link);
     
-    showSuccess(`Exported sequence for video ${videoId}`);
+    showSuccess(`Exported sequence for video ${videoId} with ${frameNumbers.length} frames`);
 }
 
 // Perform TRAKE search
