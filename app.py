@@ -7,6 +7,7 @@ import numpy as np
 import json
 import os
 import io
+import time
 from PIL import Image
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, CLIPProcessor, CLIPModel
@@ -943,6 +944,100 @@ async def calculate_frame_text_similarity(
     except Exception as e:
         print(f"Error calculating frame-text similarity: {e}")
         raise HTTPException(status_code=500, detail=f"Similarity calculation error: {str(e)}")
+
+
+@app.post("/similarity/batch-matrix")
+async def calculate_batch_similarity_matrix(request: dict):
+    """Calculate similarity matrix for multiple frames and text queries in one batch operation"""
+    # Extract data from request body
+    frame_ids = request.get("frame_ids", [])
+    text_queries = request.get("text_queries", [])
+    
+    if not frame_ids:
+        raise HTTPException(status_code=400, detail="Frame IDs list cannot be empty")
+    if not text_queries:
+        raise HTTPException(status_code=400, detail="Text queries list cannot be empty")
+    
+    # Limit batch size to prevent memory issues
+    max_frames = 200
+    max_queries = 10
+    
+    if len(frame_ids) > max_frames:
+        raise HTTPException(status_code=400, detail=f"Too many frames. Maximum: {max_frames}")
+    if len(text_queries) > max_queries:
+        raise HTTPException(status_code=400, detail=f"Too many queries. Maximum: {max_queries}")
+    
+    try:
+        print(f"🚀 Batch similarity computation: {len(text_queries)} queries × {len(frame_ids)} frames")
+        start_time = time.time()
+        
+        # Get all frame embeddings in one database query
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        placeholders = ",".join(["?" for _ in frame_ids])
+        cursor.execute(
+            f"SELECT id, embedding FROM keyframe_embeddings WHERE id IN ({placeholders}) ORDER BY id",
+            frame_ids
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        
+        if len(rows) != len(frame_ids):
+            missing_ids = set(frame_ids) - {row["id"] for row in rows}
+            raise HTTPException(status_code=404, detail=f"Frames not found: {list(missing_ids)}")
+        
+        # Create ID to index mapping to preserve order
+        id_to_row = {row["id"]: row for row in rows}
+        
+        # Build frame embeddings matrix [num_frames, embedding_dim] - preserve order
+        frame_embeddings = []
+        for frame_id in frame_ids:
+            embedding = id_to_row[frame_id]["embedding"]
+            if embedding is None:
+                raise HTTPException(status_code=404, detail=f"No embedding for frame {frame_id}")
+            # Normalize
+            embedding = embedding / np.linalg.norm(embedding)
+            frame_embeddings.append(embedding)
+        
+        frame_embeddings_matrix = np.array(frame_embeddings).astype("float32")  # [num_frames, dim]
+        
+        # Build text embeddings matrix [num_queries, embedding_dim]
+        text_embeddings = []
+        for query in text_queries:
+            if not query.strip():
+                raise HTTPException(status_code=400, detail="Text query cannot be empty")
+            text_embedding = encode_text(query.strip())
+            text_embeddings.append(text_embedding.flatten())
+        
+        text_embeddings_matrix = np.array(text_embeddings).astype("float32")  # [num_queries, dim]
+        
+        # Vectorized similarity computation: [num_queries, num_frames]
+        # similarity_matrix[i, j] = similarity between query i and frame j
+        similarity_matrix = np.dot(text_embeddings_matrix, frame_embeddings_matrix.T)
+        
+        # Clamp to [0, 1] range
+        similarity_matrix = np.clip(similarity_matrix, 0.0, 1.0)
+        
+        end_time = time.time()
+        computation_time = (end_time - start_time) * 1000  # Convert to milliseconds
+        
+        print(f"✅ Vectorized computation completed in {computation_time:.2f}ms")
+        
+        return {
+            "frame_ids": frame_ids,
+            "text_queries": text_queries,
+            "similarity_matrix": similarity_matrix.tolist(),  # [num_queries, num_frames]
+            "shape": [len(text_queries), len(frame_ids)],
+            "computation_time_ms": computation_time
+        }
+        
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        print(f"Error calculating batch similarity matrix: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Batch similarity error: {str(e)}")
 
 
 # Serve static files (images) - Keep original path structure
