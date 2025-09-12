@@ -1357,14 +1357,56 @@ async function findBestPivot(candidate, events) {
     };
 }
 
-// Calculate similarity between frame and event (simplified)
+// Cache for frame-text similarity calculations to avoid repeated API calls
+const frameTextSimilarityCache = new Map();
+
+// Calculate similarity between frame and event using CLIP embeddings
 async function calculateFrameEventSimilarity(frame, eventQuery) {
-    // This is a placeholder - in a real implementation you would:
-    // 1. Get frame embedding using the frame image
-    // 2. Get event embedding using the event text
-    // 3. Calculate cosine similarity between embeddings
-    // For now, we'll use the frame's existing similarity score as approximation
-    return Math.min(frame.similarity + (Math.random() - 0.5) * 0.2, 1.0);
+    const cacheKey = `${frame.id}:${eventQuery.trim().toLowerCase()}`;
+    
+    // Check cache first
+    if (frameTextSimilarityCache.has(cacheKey)) {
+        return frameTextSimilarityCache.get(cacheKey);
+    }
+    
+    try {
+        // Use the new API endpoint to calculate actual CLIP similarity
+        const params = new URLSearchParams({
+            frame_id: frame.id,
+            text_query: eventQuery.trim()
+        });
+        
+        const response = await fetch(`/similarity/frame-text?${params.toString()}`, {
+            method: 'POST'
+        });
+        
+        if (!response.ok) {
+            // Fallback to approximation if API fails
+            console.warn(`Frame-text similarity API failed for frame ${frame.id}, using fallback`);
+            const fallbackSimilarity = Math.min(frame.similarity + (Math.random() - 0.5) * 0.1, 1.0);
+            frameTextSimilarityCache.set(cacheKey, fallbackSimilarity);
+            return fallbackSimilarity;
+        }
+        
+        const data = await response.json();
+        const similarity = data.similarity;
+        
+        // Cache the result
+        frameTextSimilarityCache.set(cacheKey, similarity);
+        return similarity;
+        
+    } catch (error) {
+        // Fallback to approximation with less randomness on error
+        console.warn(`Error calculating frame-event similarity: ${error.message}, using fallback`);
+        const fallbackSimilarity = Math.min(frame.similarity + (Math.random() - 0.5) * 0.05, 1.0);
+        frameTextSimilarityCache.set(cacheKey, fallbackSimilarity);
+        return fallbackSimilarity;
+    }
+}
+
+// Clear similarity cache when needed (e.g., when starting a new debug session)
+function clearFrameTextSimilarityCache() {
+    frameTextSimilarityCache.clear();
 }
 
 // Enhanced sequence building around pivot with frame-number-based windowed search
@@ -1829,6 +1871,9 @@ async function startDebugTRAKE() {
         };
         
         debugLog('🚀 Starting TRAKE Debug Session', 'info');
+        
+        // Clear similarity cache for fresh calculations
+        clearFrameTextSimilarityCache();
         
         // Validate debug state initialization
         if (!debugState.phaseResults.phase1.detailedCandidates) {

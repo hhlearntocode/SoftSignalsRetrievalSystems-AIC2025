@@ -895,6 +895,56 @@ async def get_statistics():
     }
 
 
+@app.post("/similarity/frame-text")
+async def calculate_frame_text_similarity(
+    frame_id: int = Query(..., description="Frame ID to calculate similarity for"),
+    text_query: str = Query(..., description="Text query to compare against"),
+):
+    """Calculate similarity between a specific frame and text query"""
+    if not text_query.strip():
+        raise HTTPException(status_code=400, detail="Text query cannot be empty")
+    
+    try:
+        # Get frame embedding from database
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT embedding FROM keyframe_embeddings WHERE id = ?", (frame_id,)
+        )
+        row = cursor.fetchone()
+        conn.close()
+        
+        if not row or row["embedding"] is None:
+            raise HTTPException(status_code=404, detail="Frame not found or no embedding available")
+        
+        frame_embedding = row["embedding"]
+        
+        # Ensure frame embedding is normalized
+        frame_embedding = frame_embedding / np.linalg.norm(frame_embedding)
+        
+        # Get text embedding
+        text_embedding = encode_text(text_query)
+        text_embedding = text_embedding.flatten()
+        
+        # Calculate cosine similarity
+        similarity = float(np.dot(frame_embedding, text_embedding))
+        
+        # Clamp to [0, 1] range
+        similarity = max(0.0, min(1.0, similarity))
+        
+        return {
+            "frame_id": frame_id,
+            "text_query": text_query,
+            "similarity": similarity
+        }
+        
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        print(f"Error calculating frame-text similarity: {e}")
+        raise HTTPException(status_code=500, detail=f"Similarity calculation error: {str(e)}")
+
+
 # Serve static files (images) - Keep original path structure
 app.mount("/images", StaticFiles(directory="D:/keyframes"), name="images")
 app.mount("/static", StaticFiles(directory="static"), name="static")
