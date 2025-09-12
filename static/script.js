@@ -1196,17 +1196,17 @@ function createTemporalQuery(events) {
     return query;
 }
 
-// Configuration for the enhanced algorithm
+// Configuration for the enhanced algorithm (frame-number-based)
 const algorithmConfig = {
-    similarityThreshold: 0.7,
-    scoreThreshold: 0.6,
-    topK: 100,
-    maxTemporalGap: 150,
-    searchWindow: 300,
-    minSequenceCompleteness: 0.6,
-    temporalWeight: 0.3,
-    completenessWeight: 0.2,
-    earlyStopThreshold: 0.3
+    similarityThreshold: 0.7,        // Min similarity for individual event matches
+    scoreThreshold: 0.6,             // Min final score to return result
+    topK: 100,                       // Initial candidates to process
+    maxTemporalGap: 150,             // Max frame numbers between consecutive events
+    searchWindow: 300,               // Frame numbers to search around pivot
+    minSequenceCompleteness: 0.6,    // Min % of events that must be found
+    temporalWeight: 0.3,             // Weight for temporal continuity in scoring
+    completenessWeight: 0.2,         // Weight for sequence completeness in scoring
+    earlyStopThreshold: 0.3          // Min similarity to avoid early filtering
 };
 
 // Perform Enhanced TRAKE Sequence Search
@@ -1372,57 +1372,87 @@ async function calculateFrameEventSimilarity(frame, eventQuery) {
     return Math.min(frame.similarity + (Math.random() - 0.5) * 0.2, 1.0);
 }
 
-// Enhanced sequence building around pivot with windowed search
+// Enhanced sequence building around pivot with frame-number-based windowed search
 async function buildSequenceAroundPivot(pivotFrame, pivotEventIndex, events) {
     const sequence = new Array(events.length).fill(null);
     
-    // Place pivot frame
+    // Place pivot frame (use keyframe_n as frame number)
+    const pivotFrameNumber = pivotFrame.keyframe_n;
     sequence[pivotEventIndex] = {
         frame: pivotFrame,
         similarity: pivotFrame.similarity,
-        frameIndex: pivotFrame.frame_idx,
+        frameNumber: pivotFrameNumber,
         videoId: pivotFrame.video_id,
         isPivot: true
     };
     
-    // Define search window around pivot
+    // Define search window around pivot using frame numbers
     const searchWindow = algorithmConfig.searchWindow;
-    const minFrame = Math.max(0, pivotFrame.frame_idx - searchWindow);
-    const maxFrame = pivotFrame.frame_idx + searchWindow;
+    const minFrameNumber = Math.max(1, pivotFrameNumber - searchWindow);
+    const maxFrameNumber = pivotFrameNumber + searchWindow;
     
-    // Search backwards for earlier events
+    // Get all frames in the video within the search window for matrix computation
+    const videoFrames = await getVideoFramesInRange(
+        pivotFrame.video_id, 
+        minFrameNumber, 
+        maxFrameNumber
+    );
+    
+    if (!videoFrames || videoFrames.length === 0) {
+        console.warn('No video frames found in range');
+        return sequence.filter(frame => frame !== null);
+    }
+    
+    // Compute similarity matrix for all events with all frames in range
+    const similarityMatrix = await computeEventFrameSimilarityMatrix(events, videoFrames);
+    
+    // Search backwards for earlier events using matrix results
     for (let eventIdx = pivotEventIndex - 1; eventIdx >= 0; eventIdx--) {
-        const targetRange = {
-            start: minFrame,
-            end: pivotFrame.frame_idx - 1
-        };
+        const candidateFrames = videoFrames.filter(frame => 
+            frame.keyframe_n >= minFrameNumber && 
+            frame.keyframe_n < pivotFrameNumber
+        );
         
-        const bestMatch = await findBestFrameInRange(
-            events[eventIdx],
-            pivotFrame.video_id,
-            targetRange
+        const bestMatch = findBestMatchFromMatrix(
+            eventIdx, 
+            candidateFrames, 
+            videoFrames, 
+            similarityMatrix
         );
         
         if (bestMatch && bestMatch.similarity >= algorithmConfig.similarityThreshold) {
-            sequence[eventIdx] = bestMatch;
+            sequence[eventIdx] = {
+                frame: bestMatch.frame,
+                similarity: bestMatch.similarity,
+                frameNumber: bestMatch.frame.keyframe_n,
+                videoId: bestMatch.frame.video_id,
+                isPivot: false
+            };
         }
     }
     
-    // Search forwards for later events
+    // Search forwards for later events using matrix results
     for (let eventIdx = pivotEventIndex + 1; eventIdx < events.length; eventIdx++) {
-        const targetRange = {
-            start: pivotFrame.frame_idx + 1,
-            end: maxFrame
-        };
+        const candidateFrames = videoFrames.filter(frame => 
+            frame.keyframe_n > pivotFrameNumber && 
+            frame.keyframe_n <= maxFrameNumber
+        );
         
-        const bestMatch = await findBestFrameInRange(
-            events[eventIdx],
-            pivotFrame.video_id,
-            targetRange
+        const bestMatch = findBestMatchFromMatrix(
+            eventIdx, 
+            candidateFrames, 
+            videoFrames, 
+            similarityMatrix
         );
         
         if (bestMatch && bestMatch.similarity >= algorithmConfig.similarityThreshold) {
-            sequence[eventIdx] = bestMatch;
+            sequence[eventIdx] = {
+                frame: bestMatch.frame,
+                similarity: bestMatch.similarity,
+                frameNumber: bestMatch.frame.keyframe_n,
+                videoId: bestMatch.frame.video_id,
+                isPivot: false
+            };
         }
     }
     
@@ -1430,36 +1460,115 @@ async function buildSequenceAroundPivot(pivotFrame, pivotEventIndex, events) {
     return sequence.filter(frame => frame !== null);
 }
 
-// Find best frame for event within specified range
-async function findBestFrameInRange(event, videoId, frameRange) {
-    // Get video frames in the specified range
-    const videoFrames = await getVideoFrames(videoId);
-    const candidates = videoFrames.filter(frame => 
-        frame.frame_idx >= frameRange.start && 
-        frame.frame_idx <= frameRange.end
-    );
+// Get video frames within a specific frame number range (optimized)
+async function getVideoFramesInRange(videoId, minFrameNumber, maxFrameNumber) {
+    try {
+        const response = await fetch(`/video/${videoId}/frames`);
+        const frames = await response.json();
+        
+        if (!response.ok || !frames) {
+            return [];
+        }
+        
+        // Filter frames by frame number (keyframe_n) instead of frame_idx
+        return frames.filter(frame => 
+            frame.keyframe_n >= minFrameNumber && 
+            frame.keyframe_n <= maxFrameNumber
+        );
+    } catch (error) {
+        console.error('Error getting video frames in range:', error);
+        return [];
+    }
+}
+
+// Compute similarity matrix for all events with all frames (matrix operation)
+async function computeEventFrameSimilarityMatrix(events, frames) {
+    const numEvents = events.length;
+    const numFrames = frames.length;
+    
+    // Initialize similarity matrix [events x frames]
+    const matrix = new Array(numEvents);
+    for (let i = 0; i < numEvents; i++) {
+        matrix[i] = new Array(numFrames);
+    }
+    
+    // Compute similarities in batches for efficiency
+    console.log(`Computing similarity matrix: ${numEvents} events × ${numFrames} frames`);
+    
+    // For each event, compute similarity with all frames at once
+    for (let eventIdx = 0; eventIdx < numEvents; eventIdx++) {
+        const event = events[eventIdx];
+        
+        // Batch compute similarities for this event with all frames
+        const eventSimilarities = await computeEventSimilarities(event, frames);
+        
+        // Store in matrix
+        for (let frameIdx = 0; frameIdx < numFrames; frameIdx++) {
+            matrix[eventIdx][frameIdx] = eventSimilarities[frameIdx];
+        }
+    }
+    
+    console.log('Similarity matrix computed successfully');
+    return matrix;
+}
+
+// Batch compute similarities for one event with multiple frames (optimized)
+async function computeEventSimilarities(event, frames) {
+    const similarities = new Array(frames.length);
+    
+    // In a real implementation, this would use vectorized CLIP embedding computation
+    // This could be optimized by:
+    // 1. Getting the event embedding once: eventEmbedding = getCachedEmbedding(event.query)
+    // 2. Batch getting frame embeddings: frameEmbeddings = getFrameEmbeddings(frames)
+    // 3. Computing cosine similarity matrix: similarities = cosineSimilarity(eventEmbedding, frameEmbeddings)
+    
+    // For now, we simulate batch processing with async operations
+    const promises = frames.map(async (frame, i) => {
+        return await calculateFrameEventSimilarity(frame, event.query);
+    });
+    
+    const results = await Promise.all(promises);
+    
+    for (let i = 0; i < frames.length; i++) {
+        similarities[i] = results[i];
+    }
+    
+    return similarities;
+}
+
+// Find best match from precomputed similarity matrix
+function findBestMatchFromMatrix(eventIdx, candidateFrames, allFrames, similarityMatrix) {
+    if (!candidateFrames || candidateFrames.length === 0) {
+        return null;
+    }
     
     let bestMatch = null;
     let bestSimilarity = 0;
     
-    for (const candidate of candidates) {
-        const similarity = await calculateFrameEventSimilarity(candidate, event.query);
-        if (similarity > bestSimilarity) {
-            bestSimilarity = similarity;
-            bestMatch = {
-                frame: candidate,
-                similarity: similarity,
-                frameIndex: candidate.frame_idx,
-                videoId: candidate.video_id,
-                isPivot: false
-            };
+    for (const candidateFrame of candidateFrames) {
+        // Find the index of this candidate frame in the allFrames array
+        const frameIdx = allFrames.findIndex(frame => 
+            frame.keyframe_n === candidateFrame.keyframe_n && 
+            frame.video_id === candidateFrame.video_id
+        );
+        
+        if (frameIdx >= 0 && frameIdx < similarityMatrix[eventIdx].length) {
+            const similarity = similarityMatrix[eventIdx][frameIdx];
+            
+            if (similarity > bestSimilarity) {
+                bestSimilarity = similarity;
+                bestMatch = {
+                    frame: candidateFrame,
+                    similarity: similarity
+                };
+            }
         }
     }
     
     return bestMatch;
 }
 
-// Check if sequence is valid according to algorithm requirements
+// Check if sequence is valid according to algorithm requirements (using frame numbers)
 function isSequenceValid(sequence, events) {
     if (!sequence || sequence.length === 0) {
         return false;
@@ -1471,9 +1580,12 @@ function isSequenceValid(sequence, events) {
         return false;
     }
     
-    // Check temporal ordering
+    // Check temporal ordering using frame numbers
     for (let i = 1; i < sequence.length; i++) {
-        if (sequence[i].frameIndex <= sequence[i-1].frameIndex) {
+        const currentFrameNumber = sequence[i].frameNumber || sequence[i].frame?.keyframe_n;
+        const prevFrameNumber = sequence[i-1].frameNumber || sequence[i-1].frame?.keyframe_n;
+        
+        if (currentFrameNumber <= prevFrameNumber) {
             return false; // Not in temporal order
         }
     }
@@ -1523,16 +1635,20 @@ async function scoreAndRankSequences(sequences, events) {
         const scoreResult = calculateEnhancedSequenceScore(sequence, events);
         
         if (scoreResult.finalScore >= algorithmConfig.scoreThreshold) {
+            // Calculate metadata using frame numbers instead of frame indices
+            const frameNumbers = sequence.map(frame => 
+                frame.frameNumber || frame.frame?.keyframe_n || 0
+            );
+            
             results.push({
                 sequence: sequence,
                 score: scoreResult.finalScore,
                 scoreBreakdown: scoreResult.breakdown,
                 metadata: {
                     videoId: sequence.length > 0 ? sequence[0].videoId : null,
-                    startFrame: Math.min(...sequence.map(frame => frame.frameIndex)),
-                    endFrame: Math.max(...sequence.map(frame => frame.frameIndex)),
-                    duration: Math.max(...sequence.map(frame => frame.frameIndex)) - 
-                             Math.min(...sequence.map(frame => frame.frameIndex)),
+                    startFrame: Math.min(...frameNumbers),
+                    endFrame: Math.max(...frameNumbers),
+                    duration: Math.max(...frameNumbers) - Math.min(...frameNumbers),
                     completeness: sequence.length / events.length
                 }
             });
@@ -1544,7 +1660,7 @@ async function scoreAndRankSequences(sequences, events) {
     return results;
 }
 
-// Enhanced scoring system with multiple components
+// Enhanced scoring system with multiple components (using frame numbers)
 function calculateEnhancedSequenceScore(sequence, events) {
     if (sequence.length === 0) {
         return { finalScore: 0, breakdown: {} };
@@ -1555,12 +1671,16 @@ function calculateEnhancedSequenceScore(sequence, events) {
     // 1. Base similarity score (average)
     const baseSimilarityScore = similarities.reduce((sum, sim) => sum + sim, 0) / similarities.length;
     
-    // 2. Temporal continuity score
+    // 2. Temporal continuity score (using frame numbers instead of frame indices)
     let temporalScore = 1.0;
     if (sequence.length > 1) {
         let totalGapPenalty = 0;
         for (let i = 1; i < sequence.length; i++) {
-            const gap = sequence[i].frameIndex - sequence[i-1].frameIndex;
+            const currentFrameNumber = sequence[i].frameNumber || sequence[i].frame?.keyframe_n;
+            const prevFrameNumber = sequence[i-1].frameNumber || sequence[i-1].frame?.keyframe_n;
+            const gap = currentFrameNumber - prevFrameNumber;
+            
+            // Normalize gap against max temporal gap (in frame numbers)
             const normalizedGap = Math.min(gap / algorithmConfig.maxTemporalGap, 1.0);
             totalGapPenalty += normalizedGap;
         }
@@ -1577,10 +1697,13 @@ function calculateEnhancedSequenceScore(sequence, events) {
     const variance = calculateVariance(similarities);
     const consistencyBonus = Math.max(0, 1 - variance);
     
-    // 5. Sequential order bonus
+    // 5. Sequential order bonus (using frame numbers)
     let correctOrderCount = 0;
     for (let i = 1; i < sequence.length; i++) {
-        if (sequence[i].frameIndex > sequence[i-1].frameIndex) {
+        const currentFrameNumber = sequence[i].frameNumber || sequence[i].frame?.keyframe_n;
+        const prevFrameNumber = sequence[i-1].frameNumber || sequence[i-1].frame?.keyframe_n;
+        
+        if (currentFrameNumber > prevFrameNumber) {
             correctOrderCount += 1;
         }
     }

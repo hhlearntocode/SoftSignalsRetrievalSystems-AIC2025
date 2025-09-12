@@ -222,17 +222,18 @@
                                     <ul class="mb-2">
                                         <li><strong>Enhanced Query Merging:</strong> Combines events with temporal markers</li>
                                         <li><strong>Pivot-Based Discovery:</strong> Finds best matching frames as sequence anchors</li>
-                                        <li><strong>Windowed Search:</strong> Searches within configurable frame windows</li>
+                                        <li><strong>Frame-Number Windowed Search:</strong> Searches using frame numbers (keyframe_n) for efficiency</li>
+                                        <li><strong>Matrix Similarity Computation:</strong> Batch computes all event-frame similarities simultaneously</li>
                                         <li><strong>Multi-Component Scoring:</strong> Advanced scoring with temporal, completeness, and consistency factors</li>
                                     </ul>
                                 </div>
                                 <div class="col-md-6">
                                     <h6>Configuration Tips:</h6>
                                     <ul class="mb-2">
-                                        <li><strong>Search Window:</strong> Frames to search around pivot (larger = more comprehensive)</li>
-                                        <li><strong>Max Gap:</strong> Maximum frames between consecutive events</li>
-                                        <li><strong>Similarity Threshold:</strong> Minimum frame-to-event similarity</li>
-                                        <li><strong>Score Threshold:</strong> Minimum final sequence score to display</li>
+                                        <li><strong>Search Window:</strong> Frame numbers to search around pivot (larger = more comprehensive)</li>
+                                        <li><strong>Max Gap:</strong> Maximum frame number difference between consecutive events</li>
+                                        <li><strong>Similarity Threshold:</strong> Minimum frame-to-event similarity (0.0-1.0)</li>
+                                        <li><strong>Score Threshold:</strong> Minimum final sequence score to display (0.0-1.0)</li>
                                     </ul>
                                 </div>
                             </div>
