@@ -13,10 +13,15 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, CLIPProcessor, CLIPModel
 import faiss
 from typing import List, Optional
+from pydantic import BaseModel
 from googletrans import Translator
 
-# from pydantic import BaseModel  # Not needed since we use plain dicts
 import uvicorn
+
+# Pydantic models for API requests
+class BatchSimilarityRequest(BaseModel):
+    frame_ids: List[int]
+    text_queries: List[str]
 
 # Configuration - Updated to match file 2's database structure
 DATABASE_FILE = "D:/keyframe_embeddings_clip.db"
@@ -947,11 +952,11 @@ async def calculate_frame_text_similarity(
 
 
 @app.post("/similarity/batch-matrix")
-async def calculate_batch_similarity_matrix(request: dict):
+async def calculate_batch_similarity_matrix(request: BatchSimilarityRequest):
     """Calculate similarity matrix for multiple frames and text queries in one batch operation"""
     # Extract data from request body
-    frame_ids = request.get("frame_ids", [])
-    text_queries = request.get("text_queries", [])
+    frame_ids = request.frame_ids
+    text_queries = request.text_queries
     
     if not frame_ids:
         raise HTTPException(status_code=400, detail="Frame IDs list cannot be empty")
@@ -969,6 +974,8 @@ async def calculate_batch_similarity_matrix(request: dict):
     
     try:
         print(f"🚀 Batch similarity computation: {len(text_queries)} queries × {len(frame_ids)} frames")
+        print(f"📝 Frame IDs: {frame_ids[:5]}..." if len(frame_ids) > 5 else f"📝 Frame IDs: {frame_ids}")
+        print(f"📝 Text queries: {text_queries}")
         start_time = time.time()
         
         # Get all frame embeddings in one database query

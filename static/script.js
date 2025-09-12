@@ -1551,6 +1551,8 @@ async function computeEventFrameSimilarityMatrix(events, frames) {
         const textQueries = events.map(event => event.query);
         
         console.log(`📤 Single API call for entire matrix (${frameIds.length} frames × ${textQueries.length} queries)`);
+        console.log(`📋 Frame IDs sample: ${frameIds.slice(0, 5)} (showing first 5)`);
+        console.log(`📋 Text queries: ${textQueries}`);
         
         const startTime = performance.now();
         
@@ -1567,7 +1569,10 @@ async function computeEventFrameSimilarityMatrix(events, frames) {
         });
         
         if (!response.ok) {
-            throw new Error(`Batch API failed: ${response.status} ${response.statusText}`);
+            const errorText = await response.text();
+            console.error(`❌ Batch API response: ${response.status} ${response.statusText}`);
+            console.error(`❌ Error details: ${errorText}`);
+            throw new Error(`Batch API failed: ${response.status} ${response.statusText} - ${errorText}`);
         }
         
         const data = await response.json();
