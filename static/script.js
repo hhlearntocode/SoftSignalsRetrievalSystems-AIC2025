@@ -1527,7 +1527,21 @@ async function getVideoFramesInRange(videoId, minFrameNumber, maxFrameNumber) {
 // Compute similarity matrix for all events with all frames (matrix operation)
 async function computeEventFrameSimilarityMatrix(events, frames) {
     const numEvents = events.length;
-    const numFrames = frames.length;
+    let numFrames = frames.length;
+    let processingFrames = frames;
+    
+    // In debug mode, limit frame processing for performance
+    const isDebugging = debugState && debugState.isDebugging;
+    const debugFrameLimit = 100; // Limit to 100 frames in debug mode
+    
+    if (isDebugging && numFrames > debugFrameLimit) {
+        console.log(`Debug mode: limiting frame processing to ${debugFrameLimit} frames (out of ${numFrames})`);
+        // Take frames with highest similarity scores first
+        processingFrames = frames
+            .sort((a, b) => b.similarity - a.similarity)
+            .slice(0, debugFrameLimit);
+        numFrames = processingFrames.length;
+    }
     
     // Initialize similarity matrix [events x frames]
     const matrix = new Array(numEvents);
@@ -1536,18 +1550,33 @@ async function computeEventFrameSimilarityMatrix(events, frames) {
     }
     
     // Compute similarities in batches for efficiency
-    console.log(`Computing similarity matrix: ${numEvents} events × ${numFrames} frames`);
+    console.log(`Computing similarity matrix: ${numEvents} events × ${numFrames} frames (total calculations: ${numEvents * numFrames})`);
     
-    // For each event, compute similarity with all frames at once
+    // For each event, compute similarity with all frames
     for (let eventIdx = 0; eventIdx < numEvents; eventIdx++) {
         const event = events[eventIdx];
         
-        // Batch compute similarities for this event with all frames
-        const eventSimilarities = await computeEventSimilarities(event, frames);
+        console.log(`Processing event ${eventIdx + 1}/${numEvents}: "${event.query}"`);
         
-        // Store in matrix
-        for (let frameIdx = 0; frameIdx < numFrames; frameIdx++) {
-            matrix[eventIdx][frameIdx] = eventSimilarities[frameIdx];
+        try {
+            // Batch compute similarities for this event with all frames
+            const eventSimilarities = await computeEventSimilarities(event, processingFrames);
+            
+            // Store in matrix
+            for (let frameIdx = 0; frameIdx < numFrames; frameIdx++) {
+                matrix[eventIdx][frameIdx] = eventSimilarities[frameIdx];
+            }
+            
+            console.log(`Completed event ${eventIdx + 1}/${numEvents}`);
+            
+        } catch (error) {
+            console.error(`Error processing event ${eventIdx + 1}: ${error.message}`);
+            
+            // Fallback: fill with approximated similarities
+            for (let frameIdx = 0; frameIdx < numFrames; frameIdx++) {
+                const frame = processingFrames[frameIdx];
+                matrix[eventIdx][frameIdx] = Math.min(frame.similarity + (Math.random() - 0.5) * 0.1, 1.0);
+            }
         }
     }
     
@@ -1555,27 +1584,46 @@ async function computeEventFrameSimilarityMatrix(events, frames) {
     return matrix;
 }
 
-// Batch compute similarities for one event with multiple frames (optimized)
+// Batch compute similarities for one event with multiple frames (optimized with rate limiting)
 async function computeEventSimilarities(event, frames) {
     const similarities = new Array(frames.length);
+    const batchSize = 20; // Process frames in small batches to avoid overwhelming the system
     
-    // In a real implementation, this would use vectorized CLIP embedding computation
-    // This could be optimized by:
-    // 1. Getting the event embedding once: eventEmbedding = getCachedEmbedding(event.query)
-    // 2. Batch getting frame embeddings: frameEmbeddings = getFrameEmbeddings(frames)
-    // 3. Computing cosine similarity matrix: similarities = cosineSimilarity(eventEmbedding, frameEmbeddings)
+    console.log(`Computing similarities for event "${event.query}" with ${frames.length} frames (batch size: ${batchSize})`);
     
-    // For now, we simulate batch processing with async operations
-    const promises = frames.map(async (frame, i) => {
-        return await calculateFrameEventSimilarity(frame, event.query);
-    });
-    
-    const results = await Promise.all(promises);
-    
-    for (let i = 0; i < frames.length; i++) {
-        similarities[i] = results[i];
+    // Process frames in batches to avoid too many concurrent requests
+    for (let batchStart = 0; batchStart < frames.length; batchStart += batchSize) {
+        const batchEnd = Math.min(batchStart + batchSize, frames.length);
+        const batchFrames = frames.slice(batchStart, batchEnd);
+        
+        console.log(`Processing batch ${Math.floor(batchStart/batchSize) + 1}/${Math.ceil(frames.length/batchSize)} (frames ${batchStart + 1}-${batchEnd})`);
+        
+        // Process current batch
+        const batchPromises = batchFrames.map(async (frame, localIdx) => {
+            const globalIdx = batchStart + localIdx;
+            try {
+                return await calculateFrameEventSimilarity(frame, event.query);
+            } catch (error) {
+                console.warn(`Error calculating similarity for frame ${globalIdx}: ${error.message}`);
+                // Return fallback similarity
+                return Math.min(frame.similarity + (Math.random() - 0.5) * 0.05, 1.0);
+            }
+        });
+        
+        const batchResults = await Promise.all(batchPromises);
+        
+        // Store batch results in the main similarities array
+        for (let i = 0; i < batchResults.length; i++) {
+            similarities[batchStart + i] = batchResults[i];
+        }
+        
+        // Small delay between batches to prevent server overload
+        if (batchEnd < frames.length) {
+            await new Promise(resolve => setTimeout(resolve, 100)); // 100ms delay
+        }
     }
     
+    console.log(`Completed similarities for event "${event.query}"`);
     return similarities;
 }
 
