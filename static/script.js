@@ -1410,7 +1410,7 @@ function clearFrameTextSimilarityCache() {
 }
 
 // Enhanced sequence building around pivot with frame-number-based windowed search
-async function buildSequenceAroundPivot(pivotFrame, pivotEventIndex, events) {
+async function buildSequenceAroundPivot(sequence, pivotFrame, pivotEventIndex, events) {
     const sequence = new Array(events.length).fill(null);
     
     // Place pivot frame (use keyframe_n as frame number)
@@ -1461,7 +1461,7 @@ async function buildSequenceAroundPivot(pivotFrame, pivotEventIndex, events) {
             false
         );
         
-        if (bestMatch && bestMatch.similarity >= algorithmConfig.similarityThreshold) {
+        if (bestMatch && bestMatch.similarity >= algorithmConfig.similarityThreshold && sequence[eventIdx + 1].frameNumber > bestMatch.frame.keyframe_n) {
             sequence[eventIdx] = {
                 frame: bestMatch.frame,
                 similarity: bestMatch.similarity,
@@ -1488,7 +1488,7 @@ async function buildSequenceAroundPivot(pivotFrame, pivotEventIndex, events) {
             true
         );
         
-        if (bestMatch && bestMatch.similarity >= algorithmConfig.similarityThreshold) {
+        if (bestMatch && bestMatch.similarity >= algorithmConfig.similarityThreshold && sequence[eventIdx - 1].frameNumber < bestMatch.frame.keyframe_n) {
             sequence[eventIdx] = {
                 frame: bestMatch.frame,
                 similarity: bestMatch.similarity,
@@ -1532,7 +1532,7 @@ async function computeEventFrameSimilarityMatrix(events, frames) {
     
     // In debug mode, limit frame processing for performance
     const isDebugging = debugState && debugState.isDebugging;
-    const debugFrameLimit = 200; // Limit for batch API (max 200 frames)
+    const debugFrameLimit = 300; // Limit for batch API (max 300 frames)
     
     if (isDebugging && numFrames > debugFrameLimit) {
         console.log(`Debug mode: limiting frame processing to ${debugFrameLimit} frames (out of ${numFrames})`);
@@ -1750,6 +1750,7 @@ function isSequenceValid(sequence, events) {
     for (let i = 1; i < sequence.length; i++) {
         const currentFrameNumber = sequence[i].frameNumber || sequence[i].frame?.keyframe_n;
         const prevFrameNumber = sequence[i-1].frameNumber || sequence[i-1].frame?.keyframe_n;
+        
         
         if (currentFrameNumber <= prevFrameNumber) {
             return false; // Not in temporal order
@@ -2168,7 +2169,7 @@ async function debugPhase2(events, candidates) {
             
             // Build sequence around pivot
             debugLog(`🏗️ Building sequence around pivot...`, 'info');
-            const sequence = await buildSequenceAroundPivot(candidate, bestPivot.eventIndex, events);
+            const sequence = await buildSequenceAroundPivot(sequence, candidate, bestPivot.eventIndex, events);
             
             if (sequence && sequence.length > 0) {
                 debugLog(`✅ Built sequence with ${sequence.length}/${events.length} events`, 'info');
