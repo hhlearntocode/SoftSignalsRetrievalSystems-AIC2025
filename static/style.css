@@ -146,6 +146,87 @@
     cursor: grab;
 }
 
+/* Enhanced Debug Frame Preview Styles */
+.debug-frame-preview {
+    transition: all 0.2s ease;
+    border-radius: 3px;
+}
+
+.debug-frame-preview:hover {
+    transform: scale(1.1);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    z-index: 10;
+    position: relative;
+}
+
+/* Phase accordion enhancements */
+.accordion-button {
+    font-weight: 500;
+}
+
+.accordion-button:not(.collapsed) {
+    background-color: #e7f3ff;
+    border-color: #007bff;
+}
+
+/* Table enhancements for debug data */
+.table-sm th {
+    font-weight: 600;
+    font-size: 0.85em;
+    background-color: #f8f9fa;
+}
+
+.table-hover tbody tr:hover {
+    background-color: rgba(0,123,255,0.05);
+}
+
+/* Badge enhancements */
+.badge {
+    font-size: 0.75em;
+}
+
+/* Card border colors for validation states */
+.card.border-success {
+    border-color: #28a745 !important;
+}
+
+.card.border-warning {
+    border-color: #ffc107 !important;
+}
+
+.card.border-danger {
+    border-color: #dc3545 !important;
+}
+
+/* Pivot frame highlighting */
+.debug-frame-preview[style*="border: 2px solid #ffc107"] {
+    box-shadow: 0 0 0 1px #ffc107, 0 2px 4px rgba(255, 193, 7, 0.3);
+}
+
+/* Debug statistics cards */
+.debug-report .row .card {
+    height: 100%;
+}
+
+.debug-report .card-body {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+/* Responsive frame preview grid */
+.d-flex.flex-wrap.gap-1 {
+    gap: 0.25rem !important;
+}
+
+/* Loading states */
+.debug-frame-preview[src=""] {
+    background-color: #f8f9fa;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='%236c757d' viewBox='0 0 16 16'%3E%3Cpath d='M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zM7 6a1 1 0 1 1 2 0v2a1 1 0 1 1-2 0V6zm1 4a1 1 0 1 1 0 2 1 1 0 0 1 0-2z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: center;
+}
+
 .sortable-results .result-card.dragging {
     opacity: 0.5;
     transform: rotate(2deg);

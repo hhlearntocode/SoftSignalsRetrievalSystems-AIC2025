@@ -1847,7 +1847,8 @@ async function executeDebugPhases(events) {
         debugState.phaseResults.phase1 = {
             candidates: candidates,
             candidateCount: candidates.length,
-            timing: performance.now() - debugState.startTime
+            timing: performance.now() - debugState.startTime,
+            detailedCandidates: []  // Initialize empty, will be filled by debugPhase1
         };
         
         // Phase 2: Sequence Discovery
@@ -1858,7 +1859,8 @@ async function executeDebugPhases(events) {
         debugState.phaseResults.phase2 = {
             sequences: sequences,
             sequenceCount: sequences.length,
-            timing: performance.now() - debugState.startTime
+            timing: performance.now() - debugState.startTime,
+            detailedSequences: []  // Initialize empty, will be filled by debugPhase2
         };
         
         // Phase 3: Advanced Scoring
@@ -1869,7 +1871,8 @@ async function executeDebugPhases(events) {
         debugState.phaseResults.phase3 = {
             results: results,
             resultCount: results.length,
-            timing: performance.now() - debugState.startTime
+            timing: performance.now() - debugState.startTime,
+            detailedScoring: []  // Initialize empty, will be filled by debugPhase3
         };
         
         // Generate debug report
@@ -1924,6 +1927,17 @@ async function debugPhase1(events) {
             debugLog(`📈 Similarity range: ${minSim.toFixed(3)} - ${maxSim.toFixed(3)}, avg: ${avgSim.toFixed(3)}`, 'info');
         }
         
+        // Store detailed phase 1 results for debugging
+        debugState.phaseResults.phase1.detailedCandidates = data.results.slice(0, 10).map(candidate => ({
+            id: candidate.id,
+            video_id: candidate.video_id,
+            keyframe_n: candidate.keyframe_n,
+            similarity: candidate.similarity,
+            image_filename: candidate.image_filename,
+            image_path: candidate.image_path,
+            pts_time: candidate.pts_time
+        }));
+        
         return data.results;
         
     } catch (error) {
@@ -1938,6 +1952,7 @@ async function debugPhase2(events, candidates) {
     
     try {
         const validSequences = [];
+        const detailedSequenceInfo = [];
         let pivotCount = 0;
         
         for (const candidate of candidates) {
@@ -1948,8 +1963,30 @@ async function debugPhase2(events, candidates) {
             const bestPivot = await findBestPivot(candidate, events);
             debugLog(`📍 Best pivot for candidate: Event ${bestPivot.eventIndex + 1} (similarity: ${bestPivot.similarity.toFixed(3)})`, 'info');
             
+            const sequenceInfo = {
+                candidateId: pivotCount,
+                candidate: {
+                    id: candidate.id,
+                    video_id: candidate.video_id,
+                    keyframe_n: candidate.keyframe_n,
+                    similarity: candidate.similarity,
+                    image_filename: candidate.image_filename,
+                    image_path: candidate.image_path
+                },
+                pivot: {
+                    eventIndex: bestPivot.eventIndex,
+                    similarity: bestPivot.similarity,
+                    eventQuery: events[bestPivot.eventIndex]?.query || 'Unknown'
+                },
+                sequence: null,
+                valid: false,
+                reason: ''
+            };
+            
             if (bestPivot.similarity < algorithmConfig.similarityThreshold) {
-                debugLog(`❌ Pivot similarity ${bestPivot.similarity.toFixed(3)} below threshold ${algorithmConfig.similarityThreshold}`, 'warn');
+                sequenceInfo.reason = `Pivot similarity ${bestPivot.similarity.toFixed(3)} below threshold ${algorithmConfig.similarityThreshold}`;
+                debugLog(`❌ ${sequenceInfo.reason}`, 'warn');
+                detailedSequenceInfo.push(sequenceInfo);
                 continue;
             }
             
@@ -1960,16 +1997,46 @@ async function debugPhase2(events, candidates) {
             if (sequence && sequence.length > 0) {
                 debugLog(`✅ Built sequence with ${sequence.length}/${events.length} events`, 'info');
                 
+                // Store detailed sequence information
+                sequenceInfo.sequence = sequence.map((frameData, eventIndex) => ({
+                    eventIndex: eventIndex,
+                    eventQuery: events[eventIndex]?.query || 'Unknown',
+                    frame: frameData ? {
+                        id: frameData.frame?.id,
+                        keyframe_n: frameData.frameNumber || frameData.frame?.keyframe_n,
+                        similarity: frameData.similarity,
+                        image_filename: frameData.frame?.image_filename,
+                        image_path: frameData.frame?.image_path,
+                        isPivot: frameData.isPivot || false
+                    } : null,
+                    matched: frameData !== null
+                }));
+                
                 if (isSequenceValid(sequence, events)) {
                     debugLog(`✅ Sequence is valid`, 'success');
+                    sequenceInfo.valid = true;
+                    sequenceInfo.reason = 'Valid sequence passed all checks';
                     validSequences.push(sequence);
                 } else {
+                    sequenceInfo.reason = 'Sequence failed validation checks';
                     debugLog(`❌ Sequence failed validation`, 'warn');
                 }
             } else {
+                sequenceInfo.reason = 'Failed to build sequence around pivot';
                 debugLog(`❌ Failed to build sequence`, 'warn');
             }
+            
+            detailedSequenceInfo.push(sequenceInfo);
+            
+            // Only process first 10 candidates in debug mode for performance
+            if (pivotCount >= 10) {
+                debugLog(`🔍 Debug mode: limiting to first 10 candidates for detailed analysis`, 'info');
+                break;
+            }
         }
+        
+        // Store detailed phase 2 results for debugging
+        debugState.phaseResults.phase2.detailedSequences = detailedSequenceInfo;
         
         debugLog(`🏁 Phase 2 completed: ${validSequences.length} valid sequences from ${candidates.length} candidates`, 'success');
         return validSequences;
@@ -1986,6 +2053,7 @@ async function debugPhase3(sequences, events) {
     
     try {
         const results = [];
+        const detailedScoring = [];
         let sequenceCount = 0;
         
         for (const sequence of sequences) {
@@ -1995,23 +2063,46 @@ async function debugPhase3(sequences, events) {
             const scoreResult = calculateEnhancedSequenceScore(sequence, events);
             debugLog(`📈 Sequence score: ${(scoreResult.finalScore * 100).toFixed(1)}%`, 'info', scoreResult.breakdown);
             
+            // Calculate metadata
+            const frameNumbers = sequence.map(frame => 
+                frame.frameNumber || frame.frame?.keyframe_n || 0
+            );
+            
+            const scoringInfo = {
+                sequenceId: sequenceCount,
+                score: scoreResult.finalScore,
+                scoreBreakdown: scoreResult.breakdown,
+                metadata: {
+                    videoId: sequence.length > 0 ? sequence[0].videoId : null,
+                    startFrame: Math.min(...frameNumbers),
+                    endFrame: Math.max(...frameNumbers),
+                    duration: Math.max(...frameNumbers) - Math.min(...frameNumbers),
+                    completeness: sequence.length / events.length
+                },
+                frames: sequence.map((frameData, eventIndex) => ({
+                    eventIndex: eventIndex,
+                    eventQuery: events[eventIndex]?.query || 'Unknown',
+                    frame: frameData ? {
+                        id: frameData.frame?.id,
+                        keyframe_n: frameData.frameNumber || frameData.frame?.keyframe_n,
+                        similarity: frameData.similarity,
+                        image_filename: frameData.frame?.image_filename,
+                        image_path: frameData.frame?.image_path,
+                        isPivot: frameData.isPivot || false
+                    } : null,
+                    matched: frameData !== null
+                })),
+                passedThreshold: scoreResult.finalScore >= algorithmConfig.scoreThreshold
+            };
+            
+            detailedScoring.push(scoringInfo);
+            
             if (scoreResult.finalScore >= algorithmConfig.scoreThreshold) {
-                // Calculate metadata
-                const frameNumbers = sequence.map(frame => 
-                    frame.frameNumber || frame.frame?.keyframe_n || 0
-                );
-                
                 const result = {
                     sequence: sequence,
                     score: scoreResult.finalScore,
                     scoreBreakdown: scoreResult.breakdown,
-                    metadata: {
-                        videoId: sequence.length > 0 ? sequence[0].videoId : null,
-                        startFrame: Math.min(...frameNumbers),
-                        endFrame: Math.max(...frameNumbers),
-                        duration: Math.max(...frameNumbers) - Math.min(...frameNumbers),
-                        completeness: sequence.length / events.length
-                    }
+                    metadata: scoringInfo.metadata
                 };
                 
                 results.push(result);
@@ -2023,6 +2114,9 @@ async function debugPhase3(sequences, events) {
         
         // Sort results by score
         results.sort((a, b) => b.score - a.score);
+        
+        // Store detailed phase 3 results for debugging
+        debugState.phaseResults.phase3.detailedScoring = detailedScoring.sort((a, b) => b.score - a.score);
         
         debugLog(`🏆 Phase 3 completed: ${results.length} final results`, 'success');
         return results;
@@ -2198,39 +2292,285 @@ function generatePhaseDetails() {
     return `
         <div class="row mb-4">
             <div class="col-12">
-                <h5>📊 Phase Performance</h5>
+                <h5>📊 Detailed Phase Analysis</h5>
             </div>
-            <div class="col-md-4">
-                <div class="card">
-                    <div class="card-header">Phase 1: Initial Search</div>
-                    <div class="card-body">
-                        <p><strong>Candidates:</strong> ${phase1.candidateCount || 0}</p>
-                        <p><strong>Time:</strong> ${(phase1.timing || 0).toFixed(2)}ms</p>
-                        <p><strong>Status:</strong> ${phase1.candidateCount > 0 ? '✅ Success' : '❌ No candidates'}</p>
+            <div class="col-12">
+                <div class="accordion" id="phaseAccordion">
+                    <!-- Phase 1 Details -->
+                    <div class="accordion-item">
+                        <h2 class="accordion-header">
+                            <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#phase1Details">
+                                <strong>Phase 1: Initial Search</strong>
+                                <span class="badge bg-primary ms-2">${phase1.candidateCount || 0} candidates</span>
+                                <span class="badge bg-info ms-1">${(phase1.timing || 0).toFixed(0)}ms</span>
+                            </button>
+                        </h2>
+                        <div id="phase1Details" class="accordion-collapse collapse show">
+                            <div class="accordion-body">
+                                ${generatePhase1Details(phase1)}
+                            </div>
+                        </div>
                     </div>
-                </div>
-            </div>
-            <div class="col-md-4">
-                <div class="card">
-                    <div class="card-header">Phase 2: Sequence Discovery</div>
-                    <div class="card-body">
-                        <p><strong>Sequences:</strong> ${phase2.sequenceCount || 0}</p>
-                        <p><strong>Time:</strong> ${(phase2.timing || 0).toFixed(2)}ms</p>
-                        <p><strong>Status:</strong> ${phase2.sequenceCount > 0 ? '✅ Success' : '❌ No sequences'}</p>
+                    
+                    <!-- Phase 2 Details -->
+                    <div class="accordion-item">
+                        <h2 class="accordion-header">
+                            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#phase2Details">
+                                <strong>Phase 2: Sequence Discovery</strong>
+                                <span class="badge bg-warning ms-2">${phase2.sequenceCount || 0} sequences</span>
+                                <span class="badge bg-info ms-1">${(phase2.timing || 0).toFixed(0)}ms</span>
+                            </button>
+                        </h2>
+                        <div id="phase2Details" class="accordion-collapse collapse">
+                            <div class="accordion-body">
+                                ${generatePhase2Details(phase2)}
+                            </div>
+                        </div>
                     </div>
-                </div>
-            </div>
-            <div class="col-md-4">
-                <div class="card">
-                    <div class="card-header">Phase 3: Scoring</div>
-                    <div class="card-body">
-                        <p><strong>Results:</strong> ${phase3.resultCount || 0}</p>
-                        <p><strong>Time:</strong> ${(phase3.timing || 0).toFixed(2)}ms</p>
-                        <p><strong>Status:</strong> ${phase3.resultCount > 0 ? '✅ Success' : '❌ No results'}</p>
+                    
+                    <!-- Phase 3 Details -->
+                    <div class="accordion-item">
+                        <h2 class="accordion-header">
+                            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#phase3Details">
+                                <strong>Phase 3: Advanced Scoring</strong>
+                                <span class="badge bg-success ms-2">${phase3.resultCount || 0} results</span>
+                                <span class="badge bg-info ms-1">${(phase3.timing || 0).toFixed(0)}ms</span>
+                            </button>
+                        </h2>
+                        <div id="phase3Details" class="accordion-collapse collapse">
+                            <div class="accordion-body">
+                                ${generatePhase3Details(phase3)}
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
         </div>
+    `;
+}
+
+function generatePhase1Details(phase1) {
+    if (!phase1.detailedCandidates || phase1.detailedCandidates.length === 0) {
+        return '<p class="text-muted">No detailed candidate information available.</p>';
+    }
+    
+    return `
+        <h6>🔍 Top Candidate Frames</h6>
+        <div class="table-responsive">
+            <table class="table table-sm table-hover">
+                <thead class="table-light">
+                    <tr>
+                        <th>Rank</th>
+                        <th>Frame</th>
+                        <th>Video</th>
+                        <th>Keyframe #</th>
+                        <th>Similarity</th>
+                        <th>Time</th>
+                        <th>Preview</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${phase1.detailedCandidates.map((candidate, index) => `
+                        <tr>
+                            <td><span class="badge bg-primary">#${index + 1}</span></td>
+                            <td><small>${candidate.id}</small></td>
+                            <td><small>${candidate.video_id}</small></td>
+                            <td><strong>${candidate.keyframe_n}</strong></td>
+                            <td><span class="badge bg-success">${(candidate.similarity * 100).toFixed(1)}%</span></td>
+                            <td><small>${candidate.pts_time?.toFixed(1)}s</small></td>
+                            <td>
+                                <img src="/${candidate.image_path}" 
+                                     class="img-thumbnail debug-frame-preview" 
+                                     style="width: 40px; height: 30px; cursor: pointer;"
+                                     onclick="showFrameModal(${candidate.id})"
+                                     alt="Frame ${candidate.keyframe_n}">
+                            </td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>
+        <p class="small text-muted mt-2">
+            <i class="fas fa-info-circle"></i> 
+            Showing top 10 candidate frames from initial search. All candidates pass to Phase 2 (no early filtering).
+        </p>
+    `;
+}
+
+function generatePhase2Details(phase2) {
+    if (!phase2.detailedSequences || phase2.detailedSequences.length === 0) {
+        return '<p class="text-muted">No detailed sequence information available.</p>';
+    }
+    
+    return `
+        <h6>🔗 Sequence Building Analysis</h6>
+        ${phase2.detailedSequences.map((seqInfo, index) => `
+            <div class="card mb-3 ${seqInfo.valid ? 'border-success' : 'border-warning'}">
+                <div class="card-header">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <strong>Candidate #${seqInfo.candidateId}</strong>
+                        <div>
+                            <span class="badge ${seqInfo.valid ? 'bg-success' : 'bg-warning'}">${seqInfo.valid ? 'Valid' : 'Invalid'}</span>
+                            <small class="text-muted ms-2">Frame ${seqInfo.candidate.keyframe_n}</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <h6>📍 Pivot Information</h6>
+                            <p><strong>Best Event:</strong> Event ${seqInfo.pivot.eventIndex + 1} (${seqInfo.pivot.eventQuery})</p>
+                            <p><strong>Pivot Similarity:</strong> <span class="badge bg-info">${(seqInfo.pivot.similarity * 100).toFixed(1)}%</span></p>
+                            <p><strong>Reason:</strong> <small class="text-muted">${seqInfo.reason}</small></p>
+                        </div>
+                        <div class="col-md-6">
+                            <img src="/${seqInfo.candidate.image_path}" 
+                                 class="img-thumbnail" 
+                                 style="width: 120px; height: 90px; cursor: pointer;"
+                                 onclick="showFrameModal(${seqInfo.candidate.id})"
+                                 alt="Candidate Frame">
+                        </div>
+                    </div>
+                    
+                    ${seqInfo.sequence ? `
+                        <h6 class="mt-3">🎬 Sequence Frames</h6>
+                        <div class="table-responsive">
+                            <table class="table table-sm">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>Event</th>
+                                        <th>Query</th>
+                                        <th>Frame #</th>
+                                        <th>Similarity</th>
+                                        <th>Pivot</th>
+                                        <th>Preview</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${seqInfo.sequence.map((frame, eventIndex) => `
+                                        <tr class="${frame.matched ? '' : 'table-secondary'}">
+                                            <td><span class="badge bg-secondary">${eventIndex + 1}</span></td>
+                                            <td><small>${frame.eventQuery}</small></td>
+                                            <td>${frame.frame ? `<strong>${frame.frame.keyframe_n}</strong>` : '<span class="text-muted">-</span>'}</td>
+                                            <td>${frame.frame ? `<span class="badge bg-success">${(frame.frame.similarity * 100).toFixed(1)}%</span>` : '<span class="text-muted">-</span>'}</td>
+                                            <td>${frame.frame?.isPivot ? '<i class="fas fa-star text-warning"></i>' : ''}</td>
+                                            <td>
+                                                ${frame.frame ? `
+                                                    <img src="/${frame.frame.image_path}" 
+                                                         class="img-thumbnail debug-frame-preview" 
+                                                         style="width: 30px; height: 22px; cursor: pointer;"
+                                                         onclick="showFrameModal(${frame.frame.id})"
+                                                         alt="Frame ${frame.frame.keyframe_n}">
+                                                ` : '<span class="text-muted">No match</span>'}
+                                            </td>
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                    ` : ''}
+                </div>
+            </div>
+        `).join('')}
+        <p class="small text-muted">
+            <i class="fas fa-info-circle"></i> 
+            Showing detailed sequence building for top 10 candidates. Each candidate is evaluated as a potential pivot for sequence discovery.
+        </p>
+    `;
+}
+
+function generatePhase3Details(phase3) {
+    if (!phase3.detailedScoring || phase3.detailedScoring.length === 0) {
+        return '<p class="text-muted">No detailed scoring information available.</p>';
+    }
+    
+    return `
+        <h6>📊 Scoring & Ranking Analysis</h6>
+        ${phase3.detailedScoring.map((scoreInfo, index) => `
+            <div class="card mb-3 ${scoreInfo.passedThreshold ? 'border-success' : 'border-danger'}">
+                <div class="card-header">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <strong>Sequence #${scoreInfo.sequenceId}</strong>
+                        <div>
+                            <span class="badge bg-primary">${(scoreInfo.score * 100).toFixed(1)}%</span>
+                            <span class="badge ${scoreInfo.passedThreshold ? 'bg-success' : 'bg-danger'}">${scoreInfo.passedThreshold ? 'Passed' : 'Failed'}</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <h6>📈 Score Breakdown</h6>
+                            <div class="row">
+                                <div class="col-6">
+                                    <small>Base Similarity:</small><br>
+                                    <span class="badge bg-info">${(scoreInfo.scoreBreakdown.baseSimilarity * 100).toFixed(1)}%</span>
+                                </div>
+                                <div class="col-6">
+                                    <small>Temporal:</small><br>
+                                    <span class="badge bg-info">${(scoreInfo.scoreBreakdown.temporal * 100).toFixed(1)}%</span>
+                                </div>
+                                <div class="col-6 mt-2">
+                                    <small>Completeness:</small><br>
+                                    <span class="badge bg-info">${(scoreInfo.scoreBreakdown.completeness * 100).toFixed(1)}%</span>
+                                </div>
+                                <div class="col-6 mt-2">
+                                    <small>Order:</small><br>
+                                    <span class="badge bg-info">${(scoreInfo.scoreBreakdown.order * 100).toFixed(1)}%</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <h6>📋 Metadata</h6>
+                            <p><small><strong>Video:</strong> ${scoreInfo.metadata.videoId}</small></p>
+                            <p><small><strong>Frame Range:</strong> ${scoreInfo.metadata.startFrame} - ${scoreInfo.metadata.endFrame}</small></p>
+                            <p><small><strong>Duration:</strong> ${scoreInfo.metadata.duration} frames</small></p>
+                            <p><small><strong>Completeness:</strong> ${(scoreInfo.metadata.completeness * 100).toFixed(1)}%</small></p>
+                        </div>
+                    </div>
+                    
+                    <h6>🎬 Final Sequence Frames</h6>
+                    <div class="table-responsive">
+                        <table class="table table-sm">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Event</th>
+                                    <th>Query</th>
+                                    <th>Frame #</th>
+                                    <th>Similarity</th>
+                                    <th>Pivot</th>
+                                    <th>Preview</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${scoreInfo.frames.map((frame, eventIndex) => `
+                                    <tr class="${frame.matched ? '' : 'table-secondary'}">
+                                        <td><span class="badge bg-secondary">${eventIndex + 1}</span></td>
+                                        <td><small>${frame.eventQuery}</small></td>
+                                        <td>${frame.frame ? `<strong>${frame.frame.keyframe_n}</strong>` : '<span class="text-muted">-</span>'}</td>
+                                        <td>${frame.frame ? `<span class="badge bg-success">${(frame.frame.similarity * 100).toFixed(1)}%</span>` : '<span class="text-muted">-</span>'}</td>
+                                        <td>${frame.frame?.isPivot ? '<i class="fas fa-star text-warning"></i>' : ''}</td>
+                                        <td>
+                                            ${frame.frame ? `
+                                                <img src="/${frame.frame.image_path}" 
+                                                     class="img-thumbnail debug-frame-preview" 
+                                                     style="width: 30px; height: 22px; cursor: pointer;"
+                                                     onclick="showFrameModal(${frame.frame.id})"
+                                                     alt="Frame ${frame.frame.keyframe_n}">
+                                            ` : '<span class="text-muted">No match</span>'}
+                                        </td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        `).join('')}
+        <p class="small text-muted">
+            <i class="fas fa-info-circle"></i> 
+            Showing detailed scoring analysis for all sequences. Final ranking is based on combined scores from similarity, temporal order, and completeness.
+        </p>
     `;
 }
 
@@ -2284,30 +2624,100 @@ function generateResultsPreview() {
         `;
     }
     
-    const topResult = debugState.finalResults[0];
+    const maxResults = Math.min(debugState.finalResults.length, 10);
+    const displayResults = debugState.finalResults.slice(0, maxResults);
+    
     return `
         <div class="row mb-4">
             <div class="col-12">
                 <div class="card">
                     <div class="card-header">
-                        <h6 class="mb-0">🏆 Top Result Preview</h6>
+                        <h6 class="mb-0">🏆 Final Results (Top ${maxResults})</h6>
                     </div>
                     <div class="card-body">
-                        <p><strong>Score:</strong> ${(topResult.score * 100).toFixed(1)}%</p>
-                        <p><strong>Video:</strong> ${topResult.metadata.videoId}</p>
-                        <p><strong>Frame Range:</strong> ${topResult.metadata.startFrame} - ${topResult.metadata.endFrame}</p>
-                        <p><strong>Duration:</strong> ${topResult.metadata.duration} frames</p>
-                        <p><strong>Completeness:</strong> ${(topResult.metadata.completeness * 100).toFixed(1)}%</p>
+                        <div class="table-responsive">
+                            <table class="table table-sm table-hover">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>Rank</th>
+                                        <th>Score</th>
+                                        <th>Video</th>
+                                        <th>Frame Range</th>
+                                        <th>Duration</th>
+                                        <th>Completeness</th>
+                                        <th>Preview</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${displayResults.map((result, index) => {
+                                        // Get first valid frame for preview
+                                        const firstFrame = result.sequence.find(frameData => frameData && frameData.frame);
+                                        return `
+                                            <tr>
+                                                <td><span class="badge bg-primary">#${index + 1}</span></td>
+                                                <td><span class="badge bg-success">${(result.score * 100).toFixed(1)}%</span></td>
+                                                <td><small>${result.metadata.videoId}</small></td>
+                                                <td><strong>${result.metadata.startFrame} - ${result.metadata.endFrame}</strong></td>
+                                                <td>${result.metadata.duration} frames</td>
+                                                <td><span class="badge bg-info">${(result.metadata.completeness * 100).toFixed(0)}%</span></td>
+                                                <td>
+                                                    ${firstFrame ? `
+                                                        <img src="/${firstFrame.frame.image_path}" 
+                                                             class="img-thumbnail debug-frame-preview" 
+                                                             style="width: 40px; height: 30px; cursor: pointer;"
+                                                             onclick="showFrameModal(${firstFrame.frame.id})"
+                                                             alt="First frame">
+                                                    ` : '<span class="text-muted">No preview</span>'}
+                                                </td>
+                                            </tr>
+                                        `;
+                                    }).join('')}
+                                </tbody>
+                            </table>
+                        </div>
                         
-                        <h6 class="mt-3">Score Breakdown:</h6>
-                        <div class="row">
+                        <div class="row mt-3">
                             <div class="col-md-6">
-                                <p>Base Similarity: ${(topResult.scoreBreakdown.baseSimilarity * 100).toFixed(1)}%</p>
-                                <p>Temporal: ${(topResult.scoreBreakdown.temporal * 100).toFixed(1)}%</p>
+                                <h6>🥇 Top Result Details</h6>
+                                <div class="row">
+                                    <div class="col-6">
+                                        <small>Base Similarity:</small><br>
+                                        <span class="badge bg-info">${(displayResults[0].scoreBreakdown.baseSimilarity * 100).toFixed(1)}%</span>
+                                    </div>
+                                    <div class="col-6">
+                                        <small>Temporal:</small><br>
+                                        <span class="badge bg-info">${(displayResults[0].scoreBreakdown.temporal * 100).toFixed(1)}%</span>
+                                    </div>
+                                    <div class="col-6 mt-2">
+                                        <small>Completeness:</small><br>
+                                        <span class="badge bg-info">${(displayResults[0].scoreBreakdown.completeness * 100).toFixed(1)}%</span>
+                                    </div>
+                                    <div class="col-6 mt-2">
+                                        <small>Order:</small><br>
+                                        <span class="badge bg-info">${(displayResults[0].scoreBreakdown.order * 100).toFixed(1)}%</span>
+                                    </div>
+                                </div>
                             </div>
                             <div class="col-md-6">
-                                <p>Completeness: ${(topResult.scoreBreakdown.completeness * 100).toFixed(1)}%</p>
-                                <p>Order: ${(topResult.scoreBreakdown.order * 100).toFixed(1)}%</p>
+                                <h6>🎬 Top Sequence Frames</h6>
+                                <div class="d-flex flex-wrap gap-1">
+                                    ${displayResults[0].sequence.map((frameData, eventIndex) => {
+                                        if (!frameData || !frameData.frame) {
+                                            return `<div class="text-muted small" style="width: 30px; height: 22px; display: flex; align-items: center; justify-content: center; border: 1px dashed #ccc;">-</div>`;
+                                        }
+                                        return `
+                                            <img src="/${frameData.frame.image_path}" 
+                                                 class="img-thumbnail debug-frame-preview" 
+                                                 style="width: 30px; height: 22px; cursor: pointer; ${frameData.isPivot ? 'border: 2px solid #ffc107;' : ''}"
+                                                 onclick="showFrameModal(${frameData.frame.id})"
+                                                 title="Event ${eventIndex + 1}${frameData.isPivot ? ' (Pivot)' : ''}: Frame ${frameData.frame.keyframe_n}"
+                                                 alt="Frame ${frameData.frame.keyframe_n}">
+                                        `;
+                                    }).join('')}
+                                </div>
+                                <p class="small text-muted mt-1">
+                                    <i class="fas fa-star text-warning"></i> Gold border = Pivot frame
+                                </p>
                             </div>
                         </div>
                     </div>
