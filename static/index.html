@@ -41,6 +41,11 @@
                             <i class="fas fa-video me-2"></i>TRAKE Search
                         </button>
                     </li>
+                    <li class="nav-item">
+                        <button class="nav-link" id="debug-tab" data-bs-toggle="tab" data-bs-target="#debug-panel">
+                            <i class="fas fa-bug me-2"></i>Debug TRAKE
+                        </button>
+                    </li>
                 </ul>
 
                 <!-- Search Content -->
@@ -240,6 +245,103 @@
                             <p class="mb-0 mt-2"><small class="text-muted">
                                 <strong>Algorithm:</strong> Enhanced Temporal Search with Pivot Selection, Windowed Discovery, and Multi-Component Scoring (from alg.md specification)
                             </small></p>
+                        </div>
+                    </div>
+
+                    <!-- Debug Panel -->
+                    <div class="tab-pane fade" id="debug-panel">
+                        <!-- Debug Controls -->
+                        <div class="row g-3 mb-4">
+                            <div class="col-md-3">
+                                <label class="form-label">Debug Level:</label>
+                                <select id="debugLevel" class="form-select">
+                                    <option value="basic">Basic</option>
+                                    <option value="detailed" selected>Detailed</option>
+                                    <option value="verbose">Verbose</option>
+                                </select>
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">Test Events:</label>
+                                <select id="debugTestEvents" class="form-select">
+                                    <option value="">Custom Events</option>
+                                    <option value="simple">Simple Test (2 events)</option>
+                                    <option value="complex">Complex Test (4 events)</option>
+                                </select>
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">Max Debug Results:</label>
+                                <select id="debugMaxResults" class="form-select">
+                                    <option value="5">5 results</option>
+                                    <option value="10" selected>10 results</option>
+                                    <option value="20">20 results</option>
+                                </select>
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">&nbsp;</label>
+                                <button onclick="startDebugTRAKE()" class="btn btn-danger w-100">
+                                    <i class="fas fa-play me-1"></i>Start Debug
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Debug Test Events -->
+                        <div class="mb-4">
+                            <h6>Debug Test Events:</h6>
+                            <div id="debugEventsContainer">
+                                <div class="row g-2">
+                                    <div class="col-md-4">
+                                        <input type="text" class="form-control" id="debugEvent1" placeholder="Event 1: e.g., 'person walking'">
+                                    </div>
+                                    <div class="col-md-4">
+                                        <input type="text" class="form-control" id="debugEvent2" placeholder="Event 2: e.g., 'car driving'">
+                                    </div>
+                                    <div class="col-md-4">
+                                        <input type="text" class="form-control" id="debugEvent3" placeholder="Event 3 (optional)">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Debug Progress -->
+                        <div id="debugProgress" class="mb-4" style="display: none;">
+                            <div class="card">
+                                <div class="card-header">
+                                    <h6 class="mb-0">🐛 Debug Progress</h6>
+                                </div>
+                                <div class="card-body">
+                                    <div class="progress mb-3">
+                                        <div id="debugProgressBar" class="progress-bar" role="progressbar" style="width: 0%"></div>
+                                    </div>
+                                    <div id="debugCurrentStep" class="text-muted">Ready to start debugging...</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Debug Results Container -->
+                        <div id="debugResults">
+                            <div class="text-center text-muted py-5">
+                                <i class="fas fa-bug fa-3x mb-3"></i>
+                                <h4>TRAKE Algorithm Debugger</h4>
+                                <p>This tool helps you debug the TRAKE sequence search algorithm step by step.</p>
+                                <ul class="list-unstyled mt-3">
+                                    <li><strong>Phase 1:</strong> Query merging and initial search</li>
+                                    <li><strong>Phase 2:</strong> Pivot selection and sequence building</li>
+                                    <li><strong>Phase 3:</strong> Advanced scoring and ranking</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <!-- Debug Information -->
+                        <div class="alert alert-info mt-4" role="alert">
+                            <i class="fas fa-info-circle me-2"></i>
+                            <strong>Debug Features:</strong>
+                            <ul class="mb-0 mt-2">
+                                <li><strong>Step-by-step execution:</strong> See each phase of the algorithm</li>
+                                <li><strong>Similarity matrix visualization:</strong> View all event-frame similarities</li>
+                                <li><strong>Candidate analysis:</strong> Inspect why candidates were selected or rejected</li>
+                                <li><strong>Scoring breakdown:</strong> Detailed scoring component analysis</li>
+                                <li><strong>Performance metrics:</strong> Timing and efficiency statistics</li>
+                            </ul>
                         </div>
                     </div>
                 </div>

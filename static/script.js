@@ -1739,6 +1739,595 @@ function calculateVariance(similarities) {
     return Math.sqrt(variance);
 }
 
+// ===================================
+// TRAKE DEBUG SYSTEM
+// ===================================
+
+// Global debug state
+let debugState = {
+    isDebugging: false,
+    currentPhase: 0,
+    totalPhases: 3,
+    debugLevel: 'detailed',
+    startTime: null,
+    phaseResults: {},
+    events: [],
+    candidates: [],
+    sequences: [],
+    finalResults: []
+};
+
+// Debug logging function
+function debugLog(message, level = 'info', data = null) {
+    const timestamp = new Date().toISOString().substring(11, 23);
+    const logEntry = {
+        timestamp: timestamp,
+        level: level,
+        message: message,
+        data: data
+    };
+    
+    // Always log to console for debugging
+    const prefix = level === 'error' ? '❌' : level === 'warn' ? '⚠️' : level === 'success' ? '✅' : 'ℹ️';
+    console.log(`${prefix} [${timestamp}] ${message}`, data || '');
+    
+    // Update debug UI if debugging is active
+    if (debugState.isDebugging) {
+        updateDebugStep(message);
+        if (debugState.debugLevel === 'verbose' || level === 'error') {
+            appendDebugLog(logEntry);
+        }
+    }
+}
+
+// Start debug TRAKE search
+async function startDebugTRAKE() {
+    try {
+        // Initialize debug state
+        debugState = {
+            isDebugging: true,
+            currentPhase: 0,
+            totalPhases: 3,
+            debugLevel: document.getElementById('debugLevel').value,
+            startTime: performance.now(),
+            phaseResults: {},
+            events: [],
+            candidates: [],
+            sequences: [],
+            finalResults: []
+        };
+        
+        debugLog('🚀 Starting TRAKE Debug Session', 'info');
+        
+        // Show debug progress
+        document.getElementById('debugProgress').style.display = 'block';
+        updateDebugProgress(0, 'Initializing debug session...');
+        
+        // Get debug events
+        const events = getDebugEvents();
+        if (events.length < 2) {
+            throw new Error('At least 2 events are required for debugging');
+        }
+        
+        debugState.events = events;
+        debugLog(`📝 Loaded ${events.length} debug events`, 'info', events);
+        
+        // Clear previous results
+        document.getElementById('debugResults').innerHTML = '<div class="debug-log-container"></div>';
+        
+        // Start the debug algorithm phases
+        await executeDebugPhases(events);
+        
+    } catch (error) {
+        debugLog(`❌ Debug session failed: ${error.message}`, 'error', error);
+        showError('Debug failed: ' + error.message);
+    }
+}
+
+// Execute all debug phases
+async function executeDebugPhases(events) {
+    try {
+        // Phase 1: Enhanced Initial Search
+        updateDebugProgress(10, 'Phase 1: Enhanced Initial Search');
+        debugState.currentPhase = 1;
+        const candidates = await debugPhase1(events);
+        debugState.candidates = candidates;
+        debugState.phaseResults.phase1 = {
+            candidates: candidates,
+            candidateCount: candidates.length,
+            timing: performance.now() - debugState.startTime
+        };
+        
+        // Phase 2: Sequence Discovery
+        updateDebugProgress(40, 'Phase 2: Sequence Discovery');
+        debugState.currentPhase = 2;
+        const sequences = await debugPhase2(events, candidates);
+        debugState.sequences = sequences;
+        debugState.phaseResults.phase2 = {
+            sequences: sequences,
+            sequenceCount: sequences.length,
+            timing: performance.now() - debugState.startTime
+        };
+        
+        // Phase 3: Advanced Scoring
+        updateDebugProgress(70, 'Phase 3: Advanced Scoring and Ranking');
+        debugState.currentPhase = 3;
+        const results = await debugPhase3(sequences, events);
+        debugState.finalResults = results;
+        debugState.phaseResults.phase3 = {
+            results: results,
+            resultCount: results.length,
+            timing: performance.now() - debugState.startTime
+        };
+        
+        // Generate debug report
+        updateDebugProgress(90, 'Generating debug report...');
+        await generateDebugReport();
+        
+        updateDebugProgress(100, 'Debug session completed!');
+        debugLog('✅ Debug session completed successfully', 'success');
+        
+    } catch (error) {
+        debugLog(`❌ Debug phase execution failed: ${error.message}`, 'error', error);
+        throw error;
+    }
+}
+
+// Debug Phase 1: Enhanced Initial Search
+async function debugPhase1(events) {
+    debugLog('🔍 Phase 1: Enhanced Initial Search', 'info');
+    
+    try {
+        // Create temporal query
+        const mergedQuery = createTemporalQuery(events);
+        debugLog(`📝 Temporal query: "${mergedQuery}"`, 'info');
+        
+        // Perform initial search
+        debugLog('🔍 Performing initial database search...', 'info');
+        const params = new URLSearchParams({
+            query: mergedQuery,
+            top_k: algorithmConfig.topK * 2
+        });
+        
+        const response = await fetch(`/search/text?${params.toString()}`, {
+            method: 'POST'
+        });
+        
+        const data = await response.json();
+        
+        if (!response.ok) {
+            throw new Error(data.detail || 'Initial search failed');
+        }
+        
+        debugLog(`📊 Initial search returned ${data.results.length} candidates`, 'info');
+        
+        // Apply early filtering
+        const filteredCandidates = data.results.filter(candidate => 
+            candidate.similarity >= algorithmConfig.earlyStopThreshold
+        );
+        
+        debugLog(`🔧 After early filtering (threshold: ${algorithmConfig.earlyStopThreshold}): ${filteredCandidates.length} candidates`, 'info');
+        
+        // Return top-K after filtering
+        const finalCandidates = filteredCandidates.slice(0, algorithmConfig.topK);
+        debugLog(`✂️ Taking top ${algorithmConfig.topK}: ${finalCandidates.length} final candidates`, 'info');
+        
+        return finalCandidates;
+        
+    } catch (error) {
+        debugLog(`❌ Phase 1 failed: ${error.message}`, 'error', error);
+        throw error;
+    }
+}
+
+// Debug Phase 2: Sequence Discovery
+async function debugPhase2(events, candidates) {
+    debugLog('🔗 Phase 2: Sequence Discovery', 'info');
+    
+    try {
+        const validSequences = [];
+        let pivotCount = 0;
+        
+        for (const candidate of candidates) {
+            pivotCount++;
+            debugLog(`🎯 Processing candidate ${pivotCount}/${candidates.length} (Frame: ${candidate.keyframe_n}, Video: ${candidate.video_id})`, 'info');
+            
+            // Find best pivot
+            const bestPivot = await findBestPivot(candidate, events);
+            debugLog(`📍 Best pivot for candidate: Event ${bestPivot.eventIndex + 1} (similarity: ${bestPivot.similarity.toFixed(3)})`, 'info');
+            
+            if (bestPivot.similarity < algorithmConfig.similarityThreshold) {
+                debugLog(`❌ Pivot similarity ${bestPivot.similarity.toFixed(3)} below threshold ${algorithmConfig.similarityThreshold}`, 'warn');
+                continue;
+            }
+            
+            // Build sequence around pivot
+            debugLog(`🏗️ Building sequence around pivot...`, 'info');
+            const sequence = await buildSequenceAroundPivot(candidate, bestPivot.eventIndex, events);
+            
+            if (sequence && sequence.length > 0) {
+                debugLog(`✅ Built sequence with ${sequence.length}/${events.length} events`, 'info');
+                
+                if (isSequenceValid(sequence, events)) {
+                    debugLog(`✅ Sequence is valid`, 'success');
+                    validSequences.push(sequence);
+                } else {
+                    debugLog(`❌ Sequence failed validation`, 'warn');
+                }
+            } else {
+                debugLog(`❌ Failed to build sequence`, 'warn');
+            }
+        }
+        
+        debugLog(`🏁 Phase 2 completed: ${validSequences.length} valid sequences from ${candidates.length} candidates`, 'success');
+        return validSequences;
+        
+    } catch (error) {
+        debugLog(`❌ Phase 2 failed: ${error.message}`, 'error', error);
+        throw error;
+    }
+}
+
+// Debug Phase 3: Advanced Scoring
+async function debugPhase3(sequences, events) {
+    debugLog('📊 Phase 3: Advanced Scoring and Ranking', 'info');
+    
+    try {
+        const results = [];
+        let sequenceCount = 0;
+        
+        for (const sequence of sequences) {
+            sequenceCount++;
+            debugLog(`⚖️ Scoring sequence ${sequenceCount}/${sequences.length}`, 'info');
+            
+            const scoreResult = calculateEnhancedSequenceScore(sequence, events);
+            debugLog(`📈 Sequence score: ${(scoreResult.finalScore * 100).toFixed(1)}%`, 'info', scoreResult.breakdown);
+            
+            if (scoreResult.finalScore >= algorithmConfig.scoreThreshold) {
+                // Calculate metadata
+                const frameNumbers = sequence.map(frame => 
+                    frame.frameNumber || frame.frame?.keyframe_n || 0
+                );
+                
+                const result = {
+                    sequence: sequence,
+                    score: scoreResult.finalScore,
+                    scoreBreakdown: scoreResult.breakdown,
+                    metadata: {
+                        videoId: sequence.length > 0 ? sequence[0].videoId : null,
+                        startFrame: Math.min(...frameNumbers),
+                        endFrame: Math.max(...frameNumbers),
+                        duration: Math.max(...frameNumbers) - Math.min(...frameNumbers),
+                        completeness: sequence.length / events.length
+                    }
+                };
+                
+                results.push(result);
+                debugLog(`✅ Sequence passed score threshold`, 'success');
+            } else {
+                debugLog(`❌ Sequence score ${(scoreResult.finalScore * 100).toFixed(1)}% below threshold ${(algorithmConfig.scoreThreshold * 100).toFixed(1)}%`, 'warn');
+            }
+        }
+        
+        // Sort results by score
+        results.sort((a, b) => b.score - a.score);
+        
+        debugLog(`🏆 Phase 3 completed: ${results.length} final results`, 'success');
+        return results;
+        
+    } catch (error) {
+        debugLog(`❌ Phase 3 failed: ${error.message}`, 'error', error);
+        throw error;
+    }
+}
+
+// Helper functions for debug system
+function getDebugEvents() {
+    const testEvents = document.getElementById('debugTestEvents').value;
+    
+    // Use predefined test events if selected
+    if (testEvents === 'simple') {
+        return [
+            { query: 'person walking', weight: 1.0 },
+            { query: 'car driving', weight: 1.0 }
+        ];
+    } else if (testEvents === 'complex') {
+        return [
+            { query: 'person standing', weight: 1.0 },
+            { query: 'person walking', weight: 1.0 },
+            { query: 'car approaching', weight: 1.0 },
+            { query: 'car driving away', weight: 1.0 }
+        ];
+    }
+    
+    // Use custom events from input fields
+    const events = [];
+    const event1 = document.getElementById('debugEvent1').value.trim();
+    const event2 = document.getElementById('debugEvent2').value.trim();
+    const event3 = document.getElementById('debugEvent3').value.trim();
+    
+    if (event1) events.push({ query: event1, weight: 1.0 });
+    if (event2) events.push({ query: event2, weight: 1.0 });
+    if (event3) events.push({ query: event3, weight: 1.0 });
+    
+    return events;
+}
+
+function updateDebugProgress(percentage, message) {
+    const progressBar = document.getElementById('debugProgressBar');
+    const currentStep = document.getElementById('debugCurrentStep');
+    
+    if (progressBar) {
+        progressBar.style.width = percentage + '%';
+        progressBar.setAttribute('aria-valuenow', percentage);
+    }
+    
+    if (currentStep) {
+        currentStep.textContent = message;
+    }
+}
+
+function updateDebugStep(message) {
+    const currentStep = document.getElementById('debugCurrentStep');
+    if (currentStep) {
+        currentStep.textContent = message;
+    }
+}
+
+function appendDebugLog(logEntry) {
+    const container = document.querySelector('.debug-log-container');
+    if (!container) return;
+    
+    const logDiv = document.createElement('div');
+    logDiv.className = `debug-log-entry debug-log-${logEntry.level}`;
+    
+    const levelIcon = logEntry.level === 'error' ? '❌' : 
+                     logEntry.level === 'warn' ? '⚠️' : 
+                     logEntry.level === 'success' ? '✅' : 'ℹ️';
+    
+    logDiv.innerHTML = `
+        <span class="debug-timestamp">${logEntry.timestamp}</span>
+        <span class="debug-level">${levelIcon}</span>
+        <span class="debug-message">${logEntry.message}</span>
+        ${logEntry.data ? '<pre class="debug-data">' + JSON.stringify(logEntry.data, null, 2) + '</pre>' : ''}
+    `;
+    
+    container.appendChild(logDiv);
+    logDiv.scrollIntoView({ behavior: 'smooth' });
+}
+
+async function generateDebugReport() {
+    debugLog('📋 Generating comprehensive debug report...', 'info');
+    
+    const totalTime = performance.now() - debugState.startTime;
+    const resultsContainer = document.getElementById('debugResults');
+    
+    const report = `
+        <div class="debug-report">
+            <div class="row mb-4">
+                <div class="col-12">
+                    <h4>🐛 TRAKE Algorithm Debug Report</h4>
+                    <p class="text-muted">Total execution time: ${totalTime.toFixed(2)}ms</p>
+                </div>
+            </div>
+            
+            <!-- Summary Statistics -->
+            <div class="row mb-4">
+                <div class="col-md-3">
+                    <div class="card bg-primary text-white">
+                        <div class="card-body text-center">
+                            <h5>${debugState.events.length}</h5>
+                            <p class="mb-0">Events</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card bg-info text-white">
+                        <div class="card-body text-center">
+                            <h5>${debugState.candidates.length}</h5>
+                            <p class="mb-0">Candidates</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card bg-warning text-white">
+                        <div class="card-body text-center">
+                            <h5>${debugState.sequences.length}</h5>
+                            <p class="mb-0">Sequences</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card bg-success text-white">
+                        <div class="card-body text-center">
+                            <h5>${debugState.finalResults.length}</h5>
+                            <p class="mb-0">Final Results</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Phase Details -->
+            ${generatePhaseDetails()}
+            
+            <!-- Configuration Used -->
+            ${generateConfigDetails()}
+            
+            <!-- Results Preview -->
+            ${generateResultsPreview()}
+            
+            <!-- Debug Log -->
+            <div class="row mt-4">
+                <div class="col-12">
+                    <div class="card">
+                        <div class="card-header">
+                            <h6 class="mb-0">📝 Debug Log</h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="debug-log-container" style="max-height: 300px; overflow-y: auto;">
+                                <!-- Log entries will be added here -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    resultsContainer.innerHTML = report;
+    debugLog('✅ Debug report generated successfully', 'success');
+}
+
+function generatePhaseDetails() {
+    const phase1 = debugState.phaseResults.phase1 || {};
+    const phase2 = debugState.phaseResults.phase2 || {};
+    const phase3 = debugState.phaseResults.phase3 || {};
+    
+    return `
+        <div class="row mb-4">
+            <div class="col-12">
+                <h5>📊 Phase Performance</h5>
+            </div>
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-header">Phase 1: Initial Search</div>
+                    <div class="card-body">
+                        <p><strong>Candidates:</strong> ${phase1.candidateCount || 0}</p>
+                        <p><strong>Time:</strong> ${(phase1.timing || 0).toFixed(2)}ms</p>
+                        <p><strong>Status:</strong> ${phase1.candidateCount > 0 ? '✅ Success' : '❌ No candidates'}</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-header">Phase 2: Sequence Discovery</div>
+                    <div class="card-body">
+                        <p><strong>Sequences:</strong> ${phase2.sequenceCount || 0}</p>
+                        <p><strong>Time:</strong> ${(phase2.timing || 0).toFixed(2)}ms</p>
+                        <p><strong>Status:</strong> ${phase2.sequenceCount > 0 ? '✅ Success' : '❌ No sequences'}</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-header">Phase 3: Scoring</div>
+                    <div class="card-body">
+                        <p><strong>Results:</strong> ${phase3.resultCount || 0}</p>
+                        <p><strong>Time:</strong> ${(phase3.timing || 0).toFixed(2)}ms</p>
+                        <p><strong>Status:</strong> ${phase3.resultCount > 0 ? '✅ Success' : '❌ No results'}</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function generateConfigDetails() {
+    return `
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h6 class="mb-0">⚙️ Algorithm Configuration</h6>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <p><strong>Similarity Threshold:</strong> ${algorithmConfig.similarityThreshold}</p>
+                                <p><strong>Score Threshold:</strong> ${algorithmConfig.scoreThreshold}</p>
+                                <p><strong>Top K:</strong> ${algorithmConfig.topK}</p>
+                                <p><strong>Max Temporal Gap:</strong> ${algorithmConfig.maxTemporalGap}</p>
+                            </div>
+                            <div class="col-md-6">
+                                <p><strong>Search Window:</strong> ${algorithmConfig.searchWindow}</p>
+                                <p><strong>Min Completeness:</strong> ${algorithmConfig.minSequenceCompleteness}</p>
+                                <p><strong>Temporal Weight:</strong> ${algorithmConfig.temporalWeight}</p>
+                                <p><strong>Early Stop Threshold:</strong> ${algorithmConfig.earlyStopThreshold}</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function generateResultsPreview() {
+    if (debugState.finalResults.length === 0) {
+        return `
+            <div class="row mb-4">
+                <div class="col-12">
+                    <div class="alert alert-warning">
+                        <h6>⚠️ No Results Found</h6>
+                        <p>The algorithm didn't find any sequences meeting the criteria. Consider:</p>
+                        <ul>
+                            <li>Lowering the similarity threshold</li>
+                            <li>Lowering the score threshold</li>
+                            <li>Increasing the search window</li>
+                            <li>Using different event descriptions</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+    
+    const topResult = debugState.finalResults[0];
+    return `
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h6 class="mb-0">🏆 Top Result Preview</h6>
+                    </div>
+                    <div class="card-body">
+                        <p><strong>Score:</strong> ${(topResult.score * 100).toFixed(1)}%</p>
+                        <p><strong>Video:</strong> ${topResult.metadata.videoId}</p>
+                        <p><strong>Frame Range:</strong> ${topResult.metadata.startFrame} - ${topResult.metadata.endFrame}</p>
+                        <p><strong>Duration:</strong> ${topResult.metadata.duration} frames</p>
+                        <p><strong>Completeness:</strong> ${(topResult.metadata.completeness * 100).toFixed(1)}%</p>
+                        
+                        <h6 class="mt-3">Score Breakdown:</h6>
+                        <div class="row">
+                            <div class="col-md-6">
+                                <p>Base Similarity: ${(topResult.scoreBreakdown.baseSimilarity * 100).toFixed(1)}%</p>
+                                <p>Temporal: ${(topResult.scoreBreakdown.temporal * 100).toFixed(1)}%</p>
+                            </div>
+                            <div class="col-md-6">
+                                <p>Completeness: ${(topResult.scoreBreakdown.completeness * 100).toFixed(1)}%</p>
+                                <p>Order: ${(topResult.scoreBreakdown.order * 100).toFixed(1)}%</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+// Event listener for debug test events dropdown
+document.addEventListener('DOMContentLoaded', function() {
+    const debugTestEvents = document.getElementById('debugTestEvents');
+    if (debugTestEvents) {
+        debugTestEvents.addEventListener('change', function() {
+            const value = this.value;
+            const event1 = document.getElementById('debugEvent1');
+            const event2 = document.getElementById('debugEvent2');
+            const event3 = document.getElementById('debugEvent3');
+            
+            if (value === 'simple') {
+                if (event1) event1.value = 'person walking';
+                if (event2) event2.value = 'car driving';
+                if (event3) event3.value = '';
+            } else if (value === 'complex') {
+                if (event1) event1.value = 'person standing';
+                if (event2) event2.value = 'person walking';
+                if (event3) event3.value = 'car approaching';
+            }
+        });
+    }
+});
+
 // Legacy scoring function (keep for compatibility)
 function calculateSequenceScore(sequence, events) {
     const totalSimilarity = sequence.frames.reduce((sum, frameData) => {
