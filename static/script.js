@@ -1532,7 +1532,7 @@ async function computeEventFrameSimilarityMatrix(events, frames) {
     
     // In debug mode, limit frame processing for performance
     const isDebugging = debugState && debugState.isDebugging;
-    const debugFrameLimit = 300; // Limit for batch API (max 300 frames)
+    const debugFrameLimit = 200; // Limit for batch API (max 300 frames)
     
     if (isDebugging && numFrames > debugFrameLimit) {
         console.log(`Debug mode: limiting frame processing to ${debugFrameLimit} frames (out of ${numFrames})`);
