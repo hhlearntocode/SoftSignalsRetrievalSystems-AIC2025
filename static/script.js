@@ -1198,12 +1198,12 @@ function createTemporalQuery(events) {
 
 // Configuration for the enhanced algorithm (frame-number-based, no early filtering)
 const algorithmConfig = {
-    similarityThreshold: 0.7,        // Min similarity for individual event matches
-    scoreThreshold: 0.6,             // Min final score to return result
+    similarityThreshold: 0,        // Min similarity for individual event matches
+    scoreThreshold: 0,             // Min final score to return result
     topK: 10,                       // Initial candidates to process
     maxTemporalGap: 150,             // Max frame numbers between consecutive events
-    searchWindow: 300,               // Frame numbers to search around pivot
-    minSequenceCompleteness: 0.6,    // Min % of events that must be found
+    searchWindow: 3000,               // Frame numbers to search around pivot
+    minSequenceCompleteness: 0.1,    // Min % of events that must be found
     temporalWeight: 0.3,             // Weight for temporal continuity in scoring
     completenessWeight: 0.2          // Weight for sequence completeness in scoring
     // Note: earlyStopThreshold removed - Phase 1 now passes ALL candidates to Phase 2
