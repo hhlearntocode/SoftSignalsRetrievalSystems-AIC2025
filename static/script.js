@@ -1196,17 +1196,17 @@ function createTemporalQuery(events) {
     return query;
 }
 
-// Configuration for the enhanced algorithm (frame-number-based)
+// Configuration for the enhanced algorithm (frame-number-based, no early filtering)
 const algorithmConfig = {
     similarityThreshold: 0.7,        // Min similarity for individual event matches
     scoreThreshold: 0.6,             // Min final score to return result
-    topK: 100,                       // Initial candidates to process
+    topK: 10,                       // Initial candidates to process
     maxTemporalGap: 150,             // Max frame numbers between consecutive events
     searchWindow: 300,               // Frame numbers to search around pivot
     minSequenceCompleteness: 0.6,    // Min % of events that must be found
     temporalWeight: 0.3,             // Weight for temporal continuity in scoring
-    completenessWeight: 0.2,         // Weight for sequence completeness in scoring
-    earlyStopThreshold: 0.3          // Min similarity to avoid early filtering
+    completenessWeight: 0.2          // Weight for sequence completeness in scoring
+    // Note: earlyStopThreshold removed - Phase 1 now passes ALL candidates to Phase 2
 };
 
 // Perform Enhanced TRAKE Sequence Search
@@ -1229,12 +1229,11 @@ async function performTRAKESequenceSearch() {
     const minCompletenessEl = document.getElementById('minCompleteness');
     const temporalWeightEl = document.getElementById('temporalWeight');
     const completenessWeightEl = document.getElementById('completenessWeight');
-    const earlyStopThresholdEl = document.getElementById('earlyStopThreshold');
     
     if (minCompletenessEl) algorithmConfig.minSequenceCompleteness = parseFloat(minCompletenessEl.value);
     if (temporalWeightEl) algorithmConfig.temporalWeight = parseFloat(temporalWeightEl.value);
     if (completenessWeightEl) algorithmConfig.completenessWeight = parseFloat(completenessWeightEl.value);
-    if (earlyStopThresholdEl) algorithmConfig.earlyStopThreshold = parseFloat(earlyStopThresholdEl.value);
+    // Note: earlyStopThreshold removed - no longer used
     
     console.log('Enhanced TRAKE Config:', algorithmConfig);
     
@@ -1284,15 +1283,15 @@ async function performTRAKESequenceSearch() {
     }
 }
 
-// Phase 1: Enhanced Initial Search
+// Phase 1: Enhanced Initial Search (no early filtering)
 async function performInitialSearch(events) {
     const mergedQuery = createTemporalQuery(events);
     console.log('Enhanced merged query:', mergedQuery);
     
-    // Search with higher top-K to allow early filtering
+    // Search directly with desired top-K (no need for early filtering)
     const params = new URLSearchParams({
         query: mergedQuery,
-        top_k: algorithmConfig.topK * 2  // Get more candidates for filtering
+        top_k: algorithmConfig.topK
     });
     
     const response = await fetch(`/search/text?${params.toString()}`, {
@@ -1305,13 +1304,9 @@ async function performInitialSearch(events) {
         throw new Error(data.detail || 'Search failed');
     }
     
-    // Early filtering to remove very weak candidates
-    const filteredCandidates = data.results.filter(candidate => 
-        candidate.similarity >= algorithmConfig.earlyStopThreshold
-    );
-    
-    // Return top-K after filtering
-    return filteredCandidates.slice(0, algorithmConfig.topK);
+    // Return all results from query - let Phase 2 do the filtering
+    console.log(`Initial search returned ${data.results.length} candidates (no early filtering)`);
+    return data.results;
 }
 
 // Phase 2: Sequence Discovery
@@ -1378,6 +1373,7 @@ async function buildSequenceAroundPivot(pivotFrame, pivotEventIndex, events) {
     
     // Place pivot frame (use keyframe_n as frame number)
     const pivotFrameNumber = pivotFrame.keyframe_n;
+
     sequence[pivotEventIndex] = {
         frame: pivotFrame,
         similarity: pivotFrame.similarity,
@@ -1390,7 +1386,8 @@ async function buildSequenceAroundPivot(pivotFrame, pivotEventIndex, events) {
     const searchWindow = algorithmConfig.searchWindow;
     const minFrameNumber = Math.max(1, pivotFrameNumber - searchWindow);
     const maxFrameNumber = pivotFrameNumber + searchWindow;
-    
+    console.log(`Building sequence around pivot frame number ${pivotFrameNumber} (Event ${pivotEventIndex + 1})`);
+    console.log(`Searching frames in range [${minFrameNumber}, ${maxFrameNumber}]`);
     // Get all frames in the video within the search window for matrix computation
     const videoFrames = await getVideoFramesInRange(
         pivotFrame.video_id, 
@@ -1414,10 +1411,12 @@ async function buildSequenceAroundPivot(pivotFrame, pivotEventIndex, events) {
         );
         
         const bestMatch = findBestMatchFromMatrix(
+            sequence,
             eventIdx, 
             candidateFrames, 
             videoFrames, 
-            similarityMatrix
+            similarityMatrix,
+            false
         );
         
         if (bestMatch && bestMatch.similarity >= algorithmConfig.similarityThreshold) {
@@ -1439,10 +1438,12 @@ async function buildSequenceAroundPivot(pivotFrame, pivotEventIndex, events) {
         );
         
         const bestMatch = findBestMatchFromMatrix(
+            sequence,
             eventIdx, 
             candidateFrames, 
             videoFrames, 
-            similarityMatrix
+            similarityMatrix,
+            true
         );
         
         if (bestMatch && bestMatch.similarity >= algorithmConfig.similarityThreshold) {
@@ -1537,7 +1538,7 @@ async function computeEventSimilarities(event, frames) {
 }
 
 // Find best match from precomputed similarity matrix
-function findBestMatchFromMatrix(eventIdx, candidateFrames, allFrames, similarityMatrix) {
+function findBestMatchFromMatrix(sequence, eventIdx, candidateFrames, allFrames, similarityMatrix, direction) {
     if (!candidateFrames || candidateFrames.length === 0) {
         return null;
     }
@@ -1554,13 +1555,24 @@ function findBestMatchFromMatrix(eventIdx, candidateFrames, allFrames, similarit
         
         if (frameIdx >= 0 && frameIdx < similarityMatrix[eventIdx].length) {
             const similarity = similarityMatrix[eventIdx][frameIdx];
-            
-            if (similarity > bestSimilarity) {
-                bestSimilarity = similarity;
-                bestMatch = {
-                    frame: candidateFrame,
-                    similarity: similarity
-                };
+            // Forward search ensures temporal order
+            if (direction) {
+                if (similarity > bestSimilarity && sequence[eventIdx - 1].frameNumber  < candidateFrame.keyframe_n) {
+                    bestSimilarity = similarity;
+                    bestMatch = {
+                        frame: candidateFrame,
+                        similarity: similarity
+                    };
+                }
+            }
+            else {                
+                if (similarity > bestSimilarity && sequence[eventIdx + 1].frameNumber > candidateFrame.keyframe_n) {
+                    bestSimilarity = similarity;
+                    bestMatch = {
+                        frame: candidateFrame,
+                        similarity: similarity
+                    };
+                }
             }
         }
     }
@@ -1570,7 +1582,7 @@ function findBestMatchFromMatrix(eventIdx, candidateFrames, allFrames, similarit
 
 // Check if sequence is valid according to algorithm requirements (using frame numbers)
 function isSequenceValid(sequence, events) {
-    if (!sequence || sequence.length === 0) {
+    if (!sequence || sequence.length == 0) {
         return false;
     }
     
@@ -1873,9 +1885,9 @@ async function executeDebugPhases(events) {
     }
 }
 
-// Debug Phase 1: Enhanced Initial Search
+// Debug Phase 1: Enhanced Initial Search (no early filtering)
 async function debugPhase1(events) {
-    debugLog('🔍 Phase 1: Enhanced Initial Search', 'info');
+    debugLog('🔍 Phase 1: Enhanced Initial Search (no early filtering)', 'info');
     
     try {
         // Create temporal query
@@ -1886,7 +1898,7 @@ async function debugPhase1(events) {
         debugLog('🔍 Performing initial database search...', 'info');
         const params = new URLSearchParams({
             query: mergedQuery,
-            top_k: algorithmConfig.topK * 2
+            top_k: algorithmConfig.topK
         });
         
         const response = await fetch(`/search/text?${params.toString()}`, {
@@ -1900,19 +1912,19 @@ async function debugPhase1(events) {
         }
         
         debugLog(`📊 Initial search returned ${data.results.length} candidates`, 'info');
+        debugLog(`✅ Passing ALL candidates to Phase 2 (no early filtering)`, 'info');
         
-        // Apply early filtering
-        const filteredCandidates = data.results.filter(candidate => 
-            candidate.similarity >= algorithmConfig.earlyStopThreshold
-        );
+        // Log similarity distribution for debugging
+        if (data.results.length > 0) {
+            const similarities = data.results.map(c => c.similarity);
+            const minSim = Math.min(...similarities);
+            const maxSim = Math.max(...similarities);
+            const avgSim = similarities.reduce((sum, sim) => sum + sim, 0) / similarities.length;
+            
+            debugLog(`📈 Similarity range: ${minSim.toFixed(3)} - ${maxSim.toFixed(3)}, avg: ${avgSim.toFixed(3)}`, 'info');
+        }
         
-        debugLog(`🔧 After early filtering (threshold: ${algorithmConfig.earlyStopThreshold}): ${filteredCandidates.length} candidates`, 'info');
-        
-        // Return top-K after filtering
-        const finalCandidates = filteredCandidates.slice(0, algorithmConfig.topK);
-        debugLog(`✂️ Taking top ${algorithmConfig.topK}: ${finalCandidates.length} final candidates`, 'info');
-        
-        return finalCandidates;
+        return data.results;
         
     } catch (error) {
         debugLog(`❌ Phase 1 failed: ${error.message}`, 'error', error);
@@ -2242,7 +2254,7 @@ function generateConfigDetails() {
                                 <p><strong>Search Window:</strong> ${algorithmConfig.searchWindow}</p>
                                 <p><strong>Min Completeness:</strong> ${algorithmConfig.minSequenceCompleteness}</p>
                                 <p><strong>Temporal Weight:</strong> ${algorithmConfig.temporalWeight}</p>
-                                <p><strong>Early Stop Threshold:</strong> ${algorithmConfig.earlyStopThreshold}</p>
+                                <p class="text-success"><strong>Early Filtering:</strong> ❌ Disabled (All candidates passed to Phase 2)</p>
                             </div>
                         </div>
                     </div>
