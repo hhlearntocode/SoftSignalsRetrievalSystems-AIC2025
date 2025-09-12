@@ -1223,24 +1223,21 @@ async function performTRAKESequenceSearch() {
 async function findEventSequences(searchResults, events, similarityThreshold, scoreThreshold) {
     const sequences = [];
     
+    // Use all search results as potential pivots for each event position
     for (const result of searchResults) {
-        // Find best matching event for this frame (pivot)
-        const pivotEvent = await findBestMatchingEvent(result, events);
-        
-        if (pivotEvent.similarity < similarityThreshold) {
-            continue; // Skip if pivot doesn't meet similarity threshold
-        }
-        
-        // Build sequence around pivot
-        const sequence = await buildSequenceAroundPivot(result, pivotEvent, events, similarityThreshold);
-        
-        if (sequence && sequence.frames.length === events.length) {
-            // Calculate final score with new algorithm
-            const finalScore = calculateNewSequenceScore(sequence, events);
+        // Try this result as pivot for each possible event position
+        for (let eventIndex = 0; eventIndex < events.length; eventIndex++) {
+            // Build sequence around this result as pivot for eventIndex
+            const sequence = await buildSequenceAroundPivot(result, { eventIndex: eventIndex, similarity: result.similarity }, events, similarityThreshold);
             
-            if (finalScore >= scoreThreshold) {
-                sequence.score = finalScore;
-                sequences.push(sequence);
+            if (sequence && sequence.frames.length === events.length) {
+                // Calculate final score with new algorithm
+                const finalScore = calculateNewSequenceScore(sequence, events);
+                
+                if (finalScore >= scoreThreshold) {
+                    sequence.score = finalScore;
+                    sequences.push(sequence);
+                }
             }
         }
     }
@@ -1251,24 +1248,6 @@ async function findEventSequences(searchResults, events, similarityThreshold, sc
     return sequences;
 }
 
-// Find best matching event for a frame
-async function findBestMatchingEvent(frame, events) {
-    let bestMatch = { eventIndex: 0, similarity: 0 };
-    
-    for (let i = 0; i < events.length; i++) {
-        const event = events[i];
-        
-        // Use text search to get similarity between frame and event
-        // This is a simplified approach - in reality you'd use embeddings
-        const similarity = await calculateFrameEventSimilarity(frame, event.query);
-        
-        if (similarity > bestMatch.similarity) {
-            bestMatch = { eventIndex: i, similarity: similarity * event.weight };
-        }
-    }
-    
-    return bestMatch;
-}
 
 // Calculate similarity between frame and event (simplified)
 async function calculateFrameEventSimilarity(frame, eventQuery) {
