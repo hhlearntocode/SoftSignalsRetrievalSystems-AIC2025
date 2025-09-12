@@ -1802,7 +1802,26 @@ async function startDebugTRAKE() {
             totalPhases: 3,
             debugLevel: document.getElementById('debugLevel').value,
             startTime: performance.now(),
-            phaseResults: {},
+            phaseResults: {
+                phase1: {
+                    candidates: [],
+                    candidateCount: 0,
+                    timing: 0,
+                    detailedCandidates: []
+                },
+                phase2: {
+                    sequences: [],
+                    sequenceCount: 0,
+                    timing: 0,
+                    detailedSequences: []
+                },
+                phase3: {
+                    results: [],
+                    resultCount: 0,
+                    timing: 0,
+                    detailedScoring: []
+                }
+            },
             events: [],
             candidates: [],
             sequences: [],
@@ -1810,6 +1829,12 @@ async function startDebugTRAKE() {
         };
         
         debugLog('🚀 Starting TRAKE Debug Session', 'info');
+        
+        // Validate debug state initialization
+        if (!debugState.phaseResults.phase1.detailedCandidates) {
+            console.error('Debug state initialization failed - phase1.detailedCandidates not initialized');
+            throw new Error('Debug state initialization failed');
+        }
         
         // Show debug progress
         document.getElementById('debugProgress').style.display = 'block';
@@ -1844,36 +1869,30 @@ async function executeDebugPhases(events) {
         debugState.currentPhase = 1;
         const candidates = await debugPhase1(events);
         debugState.candidates = candidates;
-        debugState.phaseResults.phase1 = {
-            candidates: candidates,
-            candidateCount: candidates.length,
-            timing: performance.now() - debugState.startTime,
-            detailedCandidates: []  // Initialize empty, will be filled by debugPhase1
-        };
+        // Update phase1 results
+        debugState.phaseResults.phase1.candidates = candidates;
+        debugState.phaseResults.phase1.candidateCount = candidates.length;
+        debugState.phaseResults.phase1.timing = performance.now() - debugState.startTime;
         
         // Phase 2: Sequence Discovery
         updateDebugProgress(40, 'Phase 2: Sequence Discovery');
         debugState.currentPhase = 2;
         const sequences = await debugPhase2(events, candidates);
         debugState.sequences = sequences;
-        debugState.phaseResults.phase2 = {
-            sequences: sequences,
-            sequenceCount: sequences.length,
-            timing: performance.now() - debugState.startTime,
-            detailedSequences: []  // Initialize empty, will be filled by debugPhase2
-        };
+        // Update phase2 results
+        debugState.phaseResults.phase2.sequences = sequences;
+        debugState.phaseResults.phase2.sequenceCount = sequences.length;
+        debugState.phaseResults.phase2.timing = performance.now() - debugState.startTime;
         
         // Phase 3: Advanced Scoring
         updateDebugProgress(70, 'Phase 3: Advanced Scoring and Ranking');
         debugState.currentPhase = 3;
         const results = await debugPhase3(sequences, events);
         debugState.finalResults = results;
-        debugState.phaseResults.phase3 = {
-            results: results,
-            resultCount: results.length,
-            timing: performance.now() - debugState.startTime,
-            detailedScoring: []  // Initialize empty, will be filled by debugPhase3
-        };
+        // Update phase3 results
+        debugState.phaseResults.phase3.results = results;
+        debugState.phaseResults.phase3.resultCount = results.length;
+        debugState.phaseResults.phase3.timing = performance.now() - debugState.startTime;
         
         // Generate debug report
         updateDebugProgress(90, 'Generating debug report...');
