@@ -1410,7 +1410,7 @@ function clearFrameTextSimilarityCache() {
 }
 
 // Enhanced sequence building around pivot with frame-number-based windowed search
-async function buildSequenceAroundPivot(sequence, pivotFrame, pivotEventIndex, events) {
+async function buildSequenceAroundPivot(pivotFrame, pivotEventIndex, events) {
     const sequence = new Array(events.length).fill(null);
     
     // Place pivot frame (use keyframe_n as frame number)
@@ -2169,7 +2169,7 @@ async function debugPhase2(events, candidates) {
             
             // Build sequence around pivot
             debugLog(`🏗️ Building sequence around pivot...`, 'info');
-            const sequence = await buildSequenceAroundPivot(sequence, candidate, bestPivot.eventIndex, events);
+            const sequence = await buildSequenceAroundPivot(candidate, bestPivot.eventIndex, events);
             
             if (sequence && sequence.length > 0) {
                 debugLog(`✅ Built sequence with ${sequence.length}/${events.length} events`, 'info');
