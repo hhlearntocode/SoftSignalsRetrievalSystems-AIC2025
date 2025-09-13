@@ -1360,7 +1360,7 @@ async function findBestPivot(candidate, events) {
 // Cache for frame-text similarity calculations to avoid repeated API calls
 const frameTextSimilarityCache = new Map();
 
-// Calculate similarity between frame and event using CLIP embeddings
+// Calculate similarity between frame and event using the same logic as text search
 async function calculateFrameEventSimilarity(frame, eventQuery) {
     const cacheKey = `${frame.id}:${eventQuery.trim().toLowerCase()}`;
     
@@ -1370,30 +1370,43 @@ async function calculateFrameEventSimilarity(frame, eventQuery) {
     }
     
     try {
-        // Use the new API endpoint to calculate actual CLIP similarity
+        // Use the same /search/text API as text search for consistency
+        // This ensures embeddings and similarity calculations are identical
         const params = new URLSearchParams({
-            frame_id: frame.id,
-            text_query: eventQuery.trim()
+            query: eventQuery.trim(),
+            top_k: 1000, // Large enough to include this frame
+            video_id: frame.video_id // Filter to same video for efficiency
         });
         
-        const response = await fetch(`/similarity/frame-text?${params.toString()}`, {
+        const response = await fetch(`/search/text?${params.toString()}`, {
             method: 'POST'
         });
         
         if (!response.ok) {
             // Fallback to approximation if API fails
-            console.warn(`Frame-text similarity API failed for frame ${frame.id}, using fallback`);
+            console.warn(`Text search API failed for similarity calculation, using fallback`);
             const fallbackSimilarity = Math.min(frame.similarity + (Math.random() - 0.5) * 0.1, 1.0);
             frameTextSimilarityCache.set(cacheKey, fallbackSimilarity);
             return fallbackSimilarity;
         }
         
         const data = await response.json();
-        const similarity = data.similarity;
         
-        // Cache the result
-        frameTextSimilarityCache.set(cacheKey, similarity);
-        return similarity;
+        // Find this specific frame in the search results
+        const matchingFrame = data.results.find(result => result.id === frame.id);
+        
+        if (matchingFrame) {
+            // Use the exact similarity from text search
+            const similarity = matchingFrame.similarity;
+            frameTextSimilarityCache.set(cacheKey, similarity);
+            return similarity;
+        } else {
+            // Frame not found in search results, use conservative fallback
+            console.warn(`Frame ${frame.id} not found in text search results for query "${eventQuery}"`);
+            const fallbackSimilarity = Math.min(frame.similarity * 0.8, 1.0);
+            frameTextSimilarityCache.set(cacheKey, fallbackSimilarity);
+            return fallbackSimilarity;
+        }
         
     } catch (error) {
         // Fallback to approximation with less randomness on error
@@ -1524,7 +1537,7 @@ async function getVideoFramesInRange(videoId, minFrameNumber, maxFrameNumber) {
     }
 }
 
-// ULTRA-FAST: Compute similarity matrix using vectorized batch API (300x faster!)
+// Compute similarity matrix using text search API for consistency with regular text search
 async function computeEventFrameSimilarityMatrix(events, frames) {
     const numEvents = events.length;
     let numFrames = frames.length;
@@ -1532,7 +1545,7 @@ async function computeEventFrameSimilarityMatrix(events, frames) {
     
     // In debug mode, limit frame processing for performance
     const isDebugging = debugState && debugState.isDebugging;
-    const debugFrameLimit = 200; // Limit for batch API (max 300 frames)
+    const debugFrameLimit = 200; 
     
     if (isDebugging && numFrames > debugFrameLimit) {
         console.log(`Debug mode: limiting frame processing to ${debugFrameLimit} frames (out of ${numFrames})`);
@@ -1543,16 +1556,94 @@ async function computeEventFrameSimilarityMatrix(events, frames) {
         numFrames = processingFrames.length;
     }
     
-    console.log(`🚀 ULTRA-FAST Computing similarity matrix: ${numEvents} events × ${numFrames} frames using vectorized batch API`);
+    console.log(`🔍 Computing similarity matrix: ${numEvents} events × ${numFrames} frames using text search API for consistency`);
+    
+    try {
+        const startTime = performance.now();
+        
+        // Create video ID filter for efficiency (all frames should be from same video)
+        const videoId = processingFrames.length > 0 ? processingFrames[0].video_id : null;
+        
+        // Compute similarity matrix using text search API for each event
+        const similarityMatrix = new Array(numEvents);
+        
+        for (let eventIdx = 0; eventIdx < numEvents; eventIdx++) {
+            const event = events[eventIdx];
+            console.log(`🔎 Processing event ${eventIdx + 1}/${numEvents}: "${event.query}"`);
+            
+            // Use text search API to get similarities for this event
+            const params = new URLSearchParams({
+                query: event.query.trim(),
+                top_k: Math.max(1000, numFrames + 100) // Ensure we get all frames
+            });
+            
+            if (videoId) {
+                params.append('video_id', videoId);
+            }
+            
+            const response = await fetch(`/search/text?${params.toString()}`, {
+                method: 'POST'
+            });
+            
+            if (!response.ok) {
+                throw new Error(`Text search API failed for event "${event.query}": ${response.status}`);
+            }
+            
+            const data = await response.json();
+            
+            // Create similarity array for this event
+            const eventSimilarities = new Array(numFrames);
+            
+            // Map search results to our frame order
+            for (let frameIdx = 0; frameIdx < numFrames; frameIdx++) {
+                const frame = processingFrames[frameIdx];
+                const searchResult = data.results.find(result => result.id === frame.id);
+                
+                if (searchResult) {
+                    // Use exact similarity from text search
+                    eventSimilarities[frameIdx] = searchResult.similarity;
+                } else {
+                    // Frame not found in search results, use conservative fallback
+                    console.warn(`Frame ${frame.id} not found in search results for event "${event.query}"`);
+                    eventSimilarities[frameIdx] = Math.min(frame.similarity * 0.5, 1.0);
+                }
+            }
+            
+            similarityMatrix[eventIdx] = eventSimilarities;
+            
+            // Small delay between requests to avoid overwhelming the server
+            if (eventIdx < numEvents - 1) {
+                await new Promise(resolve => setTimeout(resolve, 50));
+            }
+        }
+        
+        const endTime = performance.now();
+        const computationTime = endTime - startTime;
+        
+        console.log(`✅ Text search API matrix computation completed in ${computationTime.toFixed(2)}ms!`);
+        console.log(`📊 Matrix shape: [${numEvents}, ${numFrames}] - Using identical similarity calculation as text search`);
+        
+        return similarityMatrix;
+        
+    } catch (error) {
+        console.error(`❌ Text search API matrix computation failed, falling back: ${error.message}`);
+        
+        // Fallback to the original batch API method
+        return await computeEventFrameSimilarityMatrixOriginalBatch(events, processingFrames);
+    }
+}
+
+// Original batch API method as fallback 
+async function computeEventFrameSimilarityMatrixOriginalBatch(events, processingFrames) {
+    const numEvents = events.length;
+    const numFrames = processingFrames.length;
+    
+    console.log(`🔄 Fallback: Using original batch API for similarity matrix`);
     
     try {
         // Prepare data for batch API
         const frameIds = processingFrames.map(frame => frame.id);
         const textQueries = events.map(event => event.query);
-        
-        console.log(`📤 Single API call for entire matrix (${frameIds.length} frames × ${textQueries.length} queries)`);
-        console.log(`📋 Frame IDs sample: ${frameIds.slice(0, 5)} (showing first 5)`);
-        console.log(`📋 Text queries: ${textQueries}`);
         
         const startTime = performance.now();
         
@@ -1581,16 +1672,15 @@ async function computeEventFrameSimilarityMatrix(events, frames) {
         const endTime = performance.now();
         const computationTime = endTime - startTime;
         
-        console.log(`✅ VECTORIZED computation completed in ${computationTime.toFixed(2)}ms! Matrix shape: [${data.shape[0]}, ${data.shape[1]}]`);
-        console.log(`⚡ Speed improvement: ~${Math.round((numEvents * numFrames * 100) / computationTime)}x faster than individual API calls`);
+        console.log(`✅ Original batch API completed in ${computationTime.toFixed(2)}ms! Matrix shape: [${data.shape[0]}, ${data.shape[1]}]`);
         
         // Return the matrix (already in correct format: events x frames)
         return similarityMatrix;
         
     } catch (error) {
-        console.error(`❌ Batch API failed, falling back to optimized individual calculations: ${error.message}`);
+        console.error(`❌ Original batch API also failed, using individual calculations: ${error.message}`);
         
-        // Fallback to optimized individual calculations
+        // Final fallback to individual calculations
         return await computeEventFrameSimilarityMatrixFallback(events, processingFrames);
     }
 }
