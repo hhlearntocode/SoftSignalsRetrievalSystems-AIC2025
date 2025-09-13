@@ -7,15 +7,23 @@ import numpy as np
 import json
 import os
 import io
+import time
 from PIL import Image
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, CLIPProcessor, CLIPModel
 import faiss
 from typing import List, Optional
+from pydantic import BaseModel
 from googletrans import Translator
 
-# from pydantic import BaseModel  # Not needed since we use plain dicts
 import uvicorn
+
+
+# Pydantic models for API requests
+class BatchSimilarityRequest(BaseModel):
+    frame_ids: List[int]
+    text_queries: List[str]
+
 
 # Configuration - Updated to match file 2's database structure
 DATABASE_FILE = "D:/keyframe_embeddings_clip.db"
@@ -899,6 +907,177 @@ async def get_statistics():
         "faiss_index_size": faiss_index.ntotal if faiss_index else 0,
         "top_videos": [dict(row) for row in top_videos],
     }
+
+
+@app.post("/similarity/frame-text")
+async def calculate_frame_text_similarity(
+    frame_id: int = Query(..., description="Frame ID to calculate similarity for"),
+    text_query: str = Query(..., description="Text query to compare against"),
+):
+    """Calculate similarity between a specific frame and text query"""
+    if not text_query.strip():
+        raise HTTPException(status_code=400, detail="Text query cannot be empty")
+
+    try:
+        # Get frame embedding from database
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT embedding FROM keyframe_embeddings WHERE id = ?", (frame_id,)
+        )
+        row = cursor.fetchone()
+        conn.close()
+
+        if not row or row["embedding"] is None:
+            raise HTTPException(
+                status_code=404, detail="Frame not found or no embedding available"
+            )
+
+        frame_embedding = row["embedding"]
+
+        # Ensure frame embedding is normalized
+        frame_embedding = frame_embedding / np.linalg.norm(frame_embedding)
+
+        # Get text embedding
+        text_embedding = encode_text(text_query)
+        text_embedding = text_embedding.flatten()
+
+        # Calculate cosine similarity
+        similarity = float(np.dot(frame_embedding, text_embedding))
+
+        # Clamp to [0, 1] range
+        similarity = max(0.0, min(1.0, similarity))
+
+        return {
+            "frame_id": frame_id,
+            "text_query": text_query,
+            "similarity": similarity,
+        }
+
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        print(f"Error calculating frame-text similarity: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Similarity calculation error: {str(e)}"
+        )
+
+
+@app.post("/similarity/batch-matrix")
+async def calculate_batch_similarity_matrix(request: BatchSimilarityRequest):
+    """Calculate similarity matrix for multiple frames and text queries in one batch operation"""
+    # Extract data from request body
+    frame_ids = request.frame_ids
+    text_queries = request.text_queries
+
+    if not frame_ids:
+        raise HTTPException(status_code=400, detail="Frame IDs list cannot be empty")
+    if not text_queries:
+        raise HTTPException(status_code=400, detail="Text queries list cannot be empty")
+
+    # Limit batch size to prevent memory issues
+    max_frames = 200
+    max_queries = 10
+
+    if len(frame_ids) > max_frames:
+        raise HTTPException(
+            status_code=400, detail=f"Too many frames. Maximum: {max_frames}"
+        )
+    if len(text_queries) > max_queries:
+        raise HTTPException(
+            status_code=400, detail=f"Too many queries. Maximum: {max_queries}"
+        )
+
+    try:
+        print(
+            f"🚀 Batch similarity computation: {len(text_queries)} queries × {len(frame_ids)} frames"
+        )
+        print(
+            f"📝 Frame IDs: {frame_ids[:5]}..."
+            if len(frame_ids) > 5
+            else f"📝 Frame IDs: {frame_ids}"
+        )
+        print(f"📝 Text queries: {text_queries}")
+        start_time = time.time()
+
+        # Get all frame embeddings in one database query
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        placeholders = ",".join(["?" for _ in frame_ids])
+        cursor.execute(
+            f"SELECT id, embedding FROM keyframe_embeddings WHERE id IN ({placeholders}) ORDER BY id",
+            frame_ids,
+        )
+        rows = cursor.fetchall()
+        conn.close()
+
+        if len(rows) != len(frame_ids):
+            missing_ids = set(frame_ids) - {row["id"] for row in rows}
+            raise HTTPException(
+                status_code=404, detail=f"Frames not found: {list(missing_ids)}"
+            )
+
+        # Create ID to index mapping to preserve order
+        id_to_row = {row["id"]: row for row in rows}
+
+        # Build frame embeddings matrix [num_frames, embedding_dim] - preserve order
+        frame_embeddings = []
+        for frame_id in frame_ids:
+            embedding = id_to_row[frame_id]["embedding"]
+            if embedding is None:
+                raise HTTPException(
+                    status_code=404, detail=f"No embedding for frame {frame_id}"
+                )
+            # Normalize
+            embedding = embedding / np.linalg.norm(embedding)
+            frame_embeddings.append(embedding)
+
+        frame_embeddings_matrix = np.array(frame_embeddings).astype(
+            "float32"
+        )  # [num_frames, dim]
+
+        # Build text embeddings matrix [num_queries, embedding_dim]
+        text_embeddings = []
+        for query in text_queries:
+            if not query.strip():
+                raise HTTPException(
+                    status_code=400, detail="Text query cannot be empty"
+                )
+            text_embedding = encode_text(query.strip())
+            text_embeddings.append(text_embedding.flatten())
+
+        text_embeddings_matrix = np.array(text_embeddings).astype(
+            "float32"
+        )  # [num_queries, dim]
+
+        # Vectorized similarity computation: [num_queries, num_frames]
+        # similarity_matrix[i, j] = similarity between query i and frame j
+        similarity_matrix = np.dot(text_embeddings_matrix, frame_embeddings_matrix.T)
+
+        # Clamp to [0, 1] range
+        similarity_matrix = np.clip(similarity_matrix, 0.0, 1.0)
+
+        end_time = time.time()
+        computation_time = (end_time - start_time) * 1000  # Convert to milliseconds
+
+        print(f"✅ Vectorized computation completed in {computation_time:.2f}ms")
+
+        return {
+            "frame_ids": frame_ids,
+            "text_queries": text_queries,
+            "similarity_matrix": similarity_matrix.tolist(),  # [num_queries, num_frames]
+            "shape": [len(text_queries), len(frame_ids)],
+            "computation_time_ms": computation_time,
+        }
+
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        print(f"Error calculating batch similarity matrix: {e}")
+        import traceback
+
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Batch similarity error: {str(e)}")
 
 
 # Serve static files (images) - Keep original path structure
