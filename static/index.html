@@ -41,6 +41,11 @@
                             <i class="fas fa-video me-2"></i>TRAKE Search
                         </button>
                     </li>
+                    <li class="nav-item">
+                        <button class="nav-link" id="debug-tab" data-bs-toggle="tab" data-bs-target="#debug-panel">
+                            <i class="fas fa-bug me-2"></i>Debug TRAKE
+                        </button>
+                    </li>
                 </ul>
 
                 <!-- Search Content -->
@@ -75,6 +80,16 @@
                                 </button>
                             </div>
                         </div>
+                        <div class="row g-3 mt-1">
+                            <div class="col-md-6">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="useKeywordParser" checked>
+                                    <label class="form-check-label" for="useKeywordParser">
+                                        Dùng keyword parser
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
                     </div>
 
                     <!-- Image Search -->
@@ -83,7 +98,7 @@
                             <div class="col-md-6">
                                 <label class="form-label">Upload Image:</label>
                                 <input type="file" id="imageFile" class="form-control" accept="image/*">
-                                <div id="imagePreview" class="mt-2"></div>
+                                <div id="imageDropZone" class="image-drop-zone mt-2">\n                                    <div class="drop-zone-content">\n                                        <i class="fas fa-cloud-upload-alt fa-2x mb-2"></i>\n                                        <p class="mb-1"><strong>Drag & drop images here</strong></p>\n                                        <p class="small text-muted mb-1">or press <kbd>Ctrl+V</kbd> to paste from clipboard</p>\n                                        <p class="small text-muted">Supports: JPG, PNG, GIF</p>\n                                    </div>\n                                </div>\n                                <div id="imagePreview" class="mt-2"></div>
                             </div>
                             <div class="col-md-2">
                                 <label class="form-label">Top K:</label>
@@ -123,36 +138,87 @@
                                     <option value="100">100 results</option>
                                 </select>
                             </div>
-                            <div class="col-md-3">
+                            <div class="col-md-2">
                                 <label class="form-label">Similarity Threshold:</label>
                                 <input type="number" id="similarityThreshold" class="form-control" 
                                        value="0.7" min="0" max="1" step="0.1" 
                                        placeholder="0.7">
                             </div>
-                            <div class="col-md-3">
+                            <div class="col-md-2">
                                 <label class="form-label">Score Threshold:</label>
                                 <input type="number" id="scoreThreshold" class="form-control" 
                                        value="0.6" min="0" max="1" step="0.1" 
                                        placeholder="0.6">
                             </div>
-                            <div class="col-md-4">
+                            <div class="col-md-2">
+                                <label class="form-label">Search Window:</label>
+                                <input type="number" id="searchWindow" class="form-control" 
+                                       value="300" min="50" max="1000" step="50" 
+                                       placeholder="300">
+                            </div>
+                            <div class="col-md-2">
+                                <label class="form-label">Max Gap:</label>
+                                <input type="number" id="maxTemporalGap" class="form-control" 
+                                       value="150" min="50" max="500" step="25" 
+                                       placeholder="150">
+                            </div>
+                            <div class="col-md-2">
                                 <label class="form-label">&nbsp;</label>
                                 <button onclick="performTRAKESequenceSearch()" class="btn btn-warning w-100">
-                                    <i class="fas fa-video me-1"></i>TRAKE Sequence Search
+                                    <i class="fas fa-video me-1"></i>Enhanced TRAKE
                                 </button>
+                            </div>
+                        </div>
+                        
+                        <!-- Advanced Configuration (Collapsible) -->
+                        <div class="mb-4">
+                            <button class="btn btn-outline-secondary btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#advancedConfig">
+                                <i class="fas fa-cog me-1"></i>Advanced Configuration
+                            </button>
+                            <div class="collapse mt-3" id="advancedConfig">
+                                <div class="card">
+                                    <div class="card-body">
+                                        <div class="row g-3">
+                                            <div class="col-md-3">
+                                                <label class="form-label">Min Completeness:</label>
+                                                <input type="number" id="minCompleteness" class="form-control" 
+                                                       value="0.6" min="0" max="1" step="0.1" 
+                                                       title="Minimum percentage of events that must be found">
+                                            </div>
+                                            <div class="col-md-3">
+                                                <label class="form-label">Temporal Weight:</label>
+                                                <input type="number" id="temporalWeight" class="form-control" 
+                                                       value="0.3" min="0" max="1" step="0.1" 
+                                                       title="Weight for temporal continuity in scoring">
+                                            </div>
+                                            <div class="col-md-3">
+                                                <label class="form-label">Completeness Weight:</label>
+                                                <input type="number" id="completenessWeight" class="form-control" 
+                                                       value="0.2" min="0" max="1" step="0.1" 
+                                                       title="Weight for sequence completeness in scoring">
+                                            </div>
+                                            <div class="col-md-3">
+                                                <label class="form-label"><small class="text-muted">Removed:</small> Early Stop</label>
+                                                <div class="form-control-plaintext">
+                                                    <small class="text-muted">No early filtering - all candidates passed to Phase 2</small>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
 
                         <!-- Events Section -->
                         <div class="mb-3">
                             <div class="d-flex justify-content-between align-items-center mb-2">
-                                <h5>Events Sequence (3+ Events)</h5>
+                                <h5>Events Sequence (2+ Events)</h5>
                                 <div class="btn-group">
                                     <button class="btn btn-success btn-sm" onclick="addNewEventRow()" id="addEventButton">
                                         <i class="fas fa-plus me-1"></i>Add Event
                                     </button>
                                     <button class="btn btn-secondary btn-sm" onclick="initializeTRAKEEvents()" id="resetEventsButton">
-                                        <i class="fas fa-refresh me-1"></i>Reset to 3
+                                        <i class="fas fa-refresh me-1"></i>Reset Events
                                     </button>
                                 </div>
                             </div>
@@ -161,16 +227,130 @@
                             </div>
                         </div>
                         
-                        <!-- TRAKE Mode Indicator -->
+                        <!-- Enhanced TRAKE Algorithm Information -->
                         <div class="alert alert-info mt-3" role="alert">
                             <i class="fas fa-info-circle me-2"></i>
-                            <strong>TRAKE Sequence Search:</strong> 
+                            <strong>Enhanced TRAKE Sequence Search Algorithm:</strong> 
+                            <div class="row mt-2">
+                                <div class="col-md-6">
+                                    <h6>How it works:</h6>
+                                    <ul class="mb-2">
+                                        <li><strong>Enhanced Query Merging:</strong> Combines events with temporal markers</li>
+                                        <li><strong>Pivot-Based Discovery:</strong> Finds best matching frames as sequence anchors</li>
+                                        <li><strong>Frame-Number Windowed Search:</strong> Searches using frame numbers (keyframe_n) for efficiency</li>
+                                        <li><strong>Matrix Similarity Computation:</strong> Batch computes all event-frame similarities simultaneously</li>
+                                        <li><strong>Multi-Component Scoring:</strong> Advanced scoring with temporal, completeness, and consistency factors</li>
+                                    </ul>
+                                </div>
+                                <div class="col-md-6">
+                                    <h6>Configuration Tips:</h6>
+                                    <ul class="mb-2">
+                                        <li><strong>Search Window:</strong> Frame numbers to search around pivot (larger = more comprehensive)</li>
+                                        <li><strong>Max Gap:</strong> Maximum frame number difference between consecutive events</li>
+                                        <li><strong>Similarity Threshold:</strong> Minimum frame-to-event similarity (0.0-1.0)</li>
+                                        <li><strong>Score Threshold:</strong> Minimum final sequence score to display (0.0-1.0)</li>
+                                    </ul>
+                                </div>
+                            </div>
+                            <p class="mb-0 mt-2"><small class="text-muted">
+                                <strong>Algorithm:</strong> Enhanced Temporal Search with Pivot Selection, Windowed Discovery, and Multi-Component Scoring (from alg.md specification)
+                            </small></p>
+                        </div>
+                    </div>
+
+                    <!-- Debug Panel -->
+                    <div class="tab-pane fade" id="debug-panel">
+                        <!-- Debug Controls -->
+                        <div class="row g-3 mb-4">
+                            <div class="col-md-3">
+                                <label class="form-label">Debug Level:</label>
+                                <select id="debugLevel" class="form-select">
+                                    <option value="basic">Basic</option>
+                                    <option value="detailed" selected>Detailed</option>
+                                    <option value="verbose">Verbose</option>
+                                </select>
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">Test Events:</label>
+                                <select id="debugTestEvents" class="form-select">
+                                    <option value="">Custom Events</option>
+                                    <option value="simple">Simple Test (2 events)</option>
+                                    <option value="complex">Complex Test (4 events)</option>
+                                </select>
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">Max Debug Results:</label>
+                                <select id="debugMaxResults" class="form-select">
+                                    <option value="5">5 results</option>
+                                    <option value="10" selected>10 results</option>
+                                    <option value="20">20 results</option>
+                                </select>
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">&nbsp;</label>
+                                <button onclick="startDebugTRAKE()" class="btn btn-danger w-100">
+                                    <i class="fas fa-play me-1"></i>Start Debug
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Debug Test Events -->
+                        <div class="mb-4">
+                            <h6>Debug Test Events:</h6>
+                            <div id="debugEventsContainer">
+                                <div class="row g-2">
+                                    <div class="col-md-4">
+                                        <input type="text" class="form-control" id="debugEvent1" placeholder="Event 1: e.g., 'person walking'">
+                                    </div>
+                                    <div class="col-md-4">
+                                        <input type="text" class="form-control" id="debugEvent2" placeholder="Event 2: e.g., 'car driving'">
+                                    </div>
+                                    <div class="col-md-4">
+                                        <input type="text" class="form-control" id="debugEvent3" placeholder="Event 3 (optional)">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Debug Progress -->
+                        <div id="debugProgress" class="mb-4" style="display: none;">
+                            <div class="card">
+                                <div class="card-header">
+                                    <h6 class="mb-0">🐛 Debug Progress</h6>
+                                </div>
+                                <div class="card-body">
+                                    <div class="progress mb-3">
+                                        <div id="debugProgressBar" class="progress-bar" role="progressbar" style="width: 0%"></div>
+                                    </div>
+                                    <div id="debugCurrentStep" class="text-muted">Ready to start debugging...</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Debug Results Container -->
+                        <div id="debugResults">
+                            <div class="text-center text-muted py-5">
+                                <i class="fas fa-bug fa-3x mb-3"></i>
+                                <h4>TRAKE Algorithm Debugger</h4>
+                                <p>This tool helps you debug the TRAKE sequence search algorithm step by step.</p>
+                                <ul class="list-unstyled mt-3">
+                                    <li><strong>Phase 1:</strong> Query merging and initial search</li>
+                                    <li><strong>Phase 2:</strong> Pivot selection and sequence building</li>
+                                    <li><strong>Phase 3:</strong> Advanced scoring and ranking</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <!-- Debug Information -->
+                        <div class="alert alert-info mt-4" role="alert">
+                            <i class="fas fa-info-circle me-2"></i>
+                            <strong>Debug Features:</strong>
                             <ul class="mb-0 mt-2">
-                                <li>Enter 3 or more events in sequence order</li>
-                                <li>System will search across entire database to find matching event sequences</li>
-                                <li>Use "Add Event" to add more events, "Reset to 3" to return to default</li>
-                                <li>Adjust similarity threshold (how similar frames must be to events)</li>
-                                <li>Adjust score threshold (minimum score for sequence to be shown)</li>
+                                <li><strong>Step-by-step execution:</strong> See each phase of the algorithm</li>
+                                <li><strong>Similarity matrix visualization:</strong> View all event-frame similarities</li>
+                                <li><strong>Candidate analysis:</strong> Inspect why candidates were selected or rejected</li>
+                                <li><strong>Scoring breakdown:</strong> Detailed scoring component analysis</li>
+                                <li><strong>Performance metrics:</strong> Timing and efficiency statistics</li>
                             </ul>
                         </div>
                     </div>
@@ -272,6 +452,6 @@
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/js/bootstrap.bundle.min.js"></script>
-    <script src="static/script.js"></script>
+    <script src="static/script.js"></script>\n    <script src="static/script_addon.js"></script>
 </body>
 </html>

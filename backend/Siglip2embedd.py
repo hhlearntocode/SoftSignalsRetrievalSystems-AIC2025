@@ -25,9 +25,9 @@ FAISS_INDEX_FILE = "keyframe_faiss_siglip2.index"
 FAISS_ID_MAP_FILE = "keyframe_faiss_map_siglip2.json"
 
 # Data paths - Update these paths according to your local setup
-KEYFRAMES_ROOT = "database/Keyframes"  # Local keyframes directory
-MEDIA_INFO_ROOT = "database/media-info"  # Local media info directory (if available)
-MAP_KEYFRAMES_ROOT = "database/map-keyframes"  # Local keyframe mapping directory (if available)
+KEYFRAMES_ROOT = "backend/keyframes"  # Local keyframes directory
+MEDIA_INFO_ROOT = "backend/media-info"  # Local media info directory (if available)
+MAP_KEYFRAMES_ROOT = "backend/map-keyframes"  # Local keyframe mapping directory (if available)
 
 # --- Database Utility Functions (SQLite) ---
 def adapt_array(arr):
