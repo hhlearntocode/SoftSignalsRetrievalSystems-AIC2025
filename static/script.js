@@ -1467,7 +1467,7 @@ async function buildSequenceAroundPivot(pivotFrame, pivotEventIndex, events) {
             false
         );
         
-        if (bestMatch && bestMatch.similarity >= algorithmConfig.similarityThreshold && sequence[eventIdx + 1].frameNumber > bestMatch.frame.keyframe_n) {
+        if (bestMatch && bestMatch.similarity >= algorithmConfig.similarityThreshold) {
             sequence[eventIdx] = {
                 frame: bestMatch.frame,
                 similarity: bestMatch.similarity,
@@ -1475,6 +1475,11 @@ async function buildSequenceAroundPivot(pivotFrame, pivotEventIndex, events) {
                 videoId: bestMatch.frame.video_id,
                 isPivot: false
             };
+            console.log(`✅ Selected frame ${bestMatch.frame.keyframe_n} for Event ${eventIdx + 1} (similarity: ${(bestMatch.similarity * 100).toFixed(1)}%)`);
+        } else if (bestMatch) {
+            console.log(`❌ Frame ${bestMatch.frame.keyframe_n} rejected for Event ${eventIdx + 1} (similarity: ${(bestMatch.similarity * 100).toFixed(1)}% < threshold: ${algorithmConfig.similarityThreshold})`);
+        } else {
+            console.log(`❌ No suitable frame found for Event ${eventIdx + 1}`);
         }
     }
     
@@ -1493,7 +1498,7 @@ async function buildSequenceAroundPivot(pivotFrame, pivotEventIndex, events) {
             true
         );
         
-        if (bestMatch && bestMatch.similarity >= algorithmConfig.similarityThreshold && sequence[eventIdx - 1].frameNumber < bestMatch.frame.keyframe_n) {
+        if (bestMatch && bestMatch.similarity >= algorithmConfig.similarityThreshold) {
             sequence[eventIdx] = {
                 frame: bestMatch.frame,
                 similarity: bestMatch.similarity,
@@ -1501,6 +1506,11 @@ async function buildSequenceAroundPivot(pivotFrame, pivotEventIndex, events) {
                 videoId: bestMatch.frame.video_id,
                 isPivot: false
             };
+            console.log(`✅ Selected frame ${bestMatch.frame.keyframe_n} for Event ${eventIdx + 1} (similarity: ${(bestMatch.similarity * 100).toFixed(1)}%)`);
+        } else if (bestMatch) {
+            console.log(`❌ Frame ${bestMatch.frame.keyframe_n} rejected for Event ${eventIdx + 1} (similarity: ${(bestMatch.similarity * 100).toFixed(1)}% < threshold: ${algorithmConfig.similarityThreshold})`);
+        } else {
+            console.log(`❌ No suitable frame found for Event ${eventIdx + 1}`);
         }
     }
     
