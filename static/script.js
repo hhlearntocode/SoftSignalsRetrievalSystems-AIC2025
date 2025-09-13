@@ -1312,23 +1312,43 @@ async function performInitialSearch(events) {
 // Phase 2: Sequence Discovery
 async function discoverSequences(events, candidates) {
     const validSequences = [];
-    
+
     for (const candidate of candidates) {
         // Find which event this candidate best matches (pivot)
         const bestPivot = await findBestPivot(candidate, events);
-        
+
         if (bestPivot.similarity < algorithmConfig.similarityThreshold) {
+            console.log(`❌ Candidate frame ${candidate.keyframe_n} rejected: pivot similarity ${bestPivot.similarity.toFixed(3)} < threshold ${algorithmConfig.similarityThreshold}`);
             continue;
         }
-        
+
+        console.log(`🎯 Processing candidate frame ${candidate.keyframe_n} as pivot for Event ${bestPivot.eventIndex + 1} (similarity: ${bestPivot.similarity.toFixed(3)})`);
+
         // Build complete sequence around this pivot
         const sequence = await buildSequenceAroundPivot(candidate, bestPivot.eventIndex, events);
-        
+
+        // ENHANCED: Verify that the sequence actually contains the pivot
+        if (!sequence || sequence.length === 0) {
+            console.warn(`❌ No sequence built for candidate frame ${candidate.keyframe_n}`);
+            continue;
+        }
+
+        const pivotInSequence = sequence.find(frame => frame.isPivot === true);
+        if (!pivotInSequence) {
+            console.warn(`❌ Pivot frame ${candidate.keyframe_n} missing from built sequence - this should not happen!`);
+            continue;
+        }
+
+        console.log(`✅ Built sequence with ${sequence.length}/${events.length} events around pivot frame ${candidate.keyframe_n}`);
+
         if (isSequenceValid(sequence, events)) {
+            console.log(`✅ Sequence with pivot frame ${candidate.keyframe_n} passed validation`);
             validSequences.push(sequence);
+        } else {
+            console.log(`❌ Sequence with pivot frame ${candidate.keyframe_n} failed validation`);
         }
     }
-    
+
     return validSequences;
 }
 
@@ -1436,7 +1456,7 @@ function clearFrameTextSimilarityCache() {
 // Enhanced sequence building around pivot with frame-number-based windowed search
 async function buildSequenceAroundPivot(pivotFrame, pivotEventIndex, events) {
     const sequence = new Array(events.length).fill(null);
-    
+
     // Place pivot frame (use keyframe_n as frame number)
     const pivotFrameNumber = pivotFrame.keyframe_n;
 
@@ -1447,37 +1467,38 @@ async function buildSequenceAroundPivot(pivotFrame, pivotEventIndex, events) {
         videoId: pivotFrame.video_id,
         isPivot: true
     };
-    
+
     console.log(`Building sequence around pivot frame number ${pivotFrameNumber} (Event ${pivotEventIndex + 1})`);
     console.log(`Searching entire video for optimal event matches`);
-    
+
     // Get ALL frames in the video (not just windowed search) for accurate similarity comparison
     // This ensures we find the best matches just like manual text search does
     const videoFrames = await getAllVideoFrames(pivotFrame.video_id);
-    
+
     if (!videoFrames || videoFrames.length === 0) {
         console.warn('No video frames found');
-        return sequence.filter(frame => frame !== null);
+        // Ensure pivot is always included even if no other frames found
+        return [sequence[pivotEventIndex]].filter(frame => frame !== null);
     }
-    
+
     // Compute similarity matrix for all events with ALL frames in video (like text search)
     const similarityMatrix = await computeEventFrameSimilarityMatrix(events, videoFrames);
-    
+
     // Search backwards for earlier events - consider ALL frames before pivot
     for (let eventIdx = pivotEventIndex - 1; eventIdx >= 0; eventIdx--) {
-        const candidateFrames = videoFrames.filter(frame => 
+        const candidateFrames = videoFrames.filter(frame =>
             frame.keyframe_n < pivotFrameNumber  // Only temporal constraint: before pivot
         );
-        
+
         const bestMatch = findBestMatchFromMatrix(
             sequence,
-            eventIdx, 
-            candidateFrames, 
-            videoFrames, 
+            eventIdx,
+            candidateFrames,
+            videoFrames,
             similarityMatrix,
             false
         );
-        
+
         if (bestMatch && bestMatch.similarity >= algorithmConfig.similarityThreshold) {
             sequence[eventIdx] = {
                 frame: bestMatch.frame,
@@ -1493,22 +1514,22 @@ async function buildSequenceAroundPivot(pivotFrame, pivotEventIndex, events) {
             console.log(`❌ No suitable frame found for Event ${eventIdx + 1}`);
         }
     }
-    
+
     // Search forwards for later events - consider ALL frames after pivot
     for (let eventIdx = pivotEventIndex + 1; eventIdx < events.length; eventIdx++) {
-        const candidateFrames = videoFrames.filter(frame => 
+        const candidateFrames = videoFrames.filter(frame =>
             frame.keyframe_n > pivotFrameNumber  // Only temporal constraint: after pivot
         );
-        
+
         const bestMatch = findBestMatchFromMatrix(
             sequence,
-            eventIdx, 
-            candidateFrames, 
-            videoFrames, 
+            eventIdx,
+            candidateFrames,
+            videoFrames,
             similarityMatrix,
             true
         );
-        
+
         if (bestMatch && bestMatch.similarity >= algorithmConfig.similarityThreshold) {
             sequence[eventIdx] = {
                 frame: bestMatch.frame,
@@ -1524,9 +1545,19 @@ async function buildSequenceAroundPivot(pivotFrame, pivotEventIndex, events) {
             console.log(`❌ No suitable frame found for Event ${eventIdx + 1}`);
         }
     }
-    
-    // Return only non-null frames
-    return sequence.filter(frame => frame !== null);
+
+    // CRITICAL FIX: Always ensure the pivot frame is included in the final sequence
+    const filteredSequence = sequence.filter(frame => frame !== null);
+
+    // Double-check that pivot is included - if somehow it got filtered out, add it back
+    if (!filteredSequence.some(frame => frame.isPivot)) {
+        console.warn('Pivot frame was missing from filtered sequence, adding it back');
+        filteredSequence.push(sequence[pivotEventIndex]);
+        // Re-sort by frame number to maintain temporal order
+        filteredSequence.sort((a, b) => a.frameNumber - b.frameNumber);
+    }
+
+    return filteredSequence;
 }
 
 // Get ALL frames from a video (for complete search like text search)
@@ -1870,24 +1901,32 @@ function isSequenceValid(sequence, events) {
     if (!sequence || sequence.length == 0) {
         return false;
     }
-    
+
+    // CRITICAL: Every sequence MUST contain at least one pivot frame
+    const hasPivot = sequence.some(frame => frame.isPivot === true);
+    if (!hasPivot) {
+        console.warn('Sequence validation failed: No pivot frame found');
+        return false;
+    }
+
     // Check minimum completeness requirement
     const completeness = sequence.length / events.length;
     if (completeness < algorithmConfig.minSequenceCompleteness) {
+        console.warn(`Sequence validation failed: Completeness ${(completeness*100).toFixed(1)}% < required ${(algorithmConfig.minSequenceCompleteness*100).toFixed(1)}%`);
         return false;
     }
-    
+
     // Check temporal ordering using frame numbers
     for (let i = 1; i < sequence.length; i++) {
         const currentFrameNumber = sequence[i].frameNumber || sequence[i].frame?.keyframe_n;
         const prevFrameNumber = sequence[i-1].frameNumber || sequence[i-1].frame?.keyframe_n;
-        
-        
+
         if (currentFrameNumber <= prevFrameNumber) {
+            console.warn(`Sequence validation failed: Temporal order violation at positions ${i-1} and ${i} (frames ${prevFrameNumber} -> ${currentFrameNumber})`);
             return false; // Not in temporal order
         }
     }
-    
+
     return true;
 }
 
@@ -2301,14 +2340,30 @@ async function debugPhase2(events, candidates) {
             // Build sequence around pivot
             debugLog(`🏗️ Building sequence around pivot...`, 'info');
             const sequence = await buildSequenceAroundPivot(candidate, bestPivot.eventIndex, events);
-            
+
             if (sequence && sequence.length > 0) {
                 debugLog(`✅ Built sequence with ${sequence.length}/${events.length} events`, 'info');
-                
+
+                // ENHANCED: Verify that the sequence actually contains the pivot
+                const pivotInSequence = sequence.find(frame => frame.isPivot === true);
+                if (!pivotInSequence) {
+                    sequenceInfo.reason = 'Pivot frame missing from built sequence - algorithm error';
+                    debugLog(`❌ ${sequenceInfo.reason}`, 'error');
+                    detailedSequenceInfo.push(sequenceInfo);
+                    continue;
+                }
+
                 // Store detailed sequence information
-                sequenceInfo.sequence = sequence.map((frameData, eventIndex) => ({
-                    eventIndex: eventIndex,
-                    eventQuery: events[eventIndex]?.query || 'Unknown',
+                sequenceInfo.sequence = sequence.map((frameData, sequenceIndex) => ({
+                    sequenceIndex: sequenceIndex,
+                    // Find which event this frame corresponds to by matching similarity and frame
+                    eventIndex: events.findIndex(event => {
+                        // For pivot, we know the event index
+                        if (frameData.isPivot) return bestPivot.eventIndex;
+                        // For others, we need to find based on the frame position in the original sequence building
+                        return -1; // Will be properly mapped below
+                    }),
+                    eventQuery: 'To be determined', // Will be updated below
                     frame: frameData ? {
                         id: frameData.frame?.id,
                         keyframe_n: frameData.frameNumber || frameData.frame?.keyframe_n,
@@ -2319,15 +2374,27 @@ async function debugPhase2(events, candidates) {
                     } : null,
                     matched: frameData !== null
                 }));
-                
+
+                // Fix event mapping for sequence display
+                sequenceInfo.sequence.forEach((seqItem, idx) => {
+                    if (seqItem.frame?.isPivot) {
+                        seqItem.eventIndex = bestPivot.eventIndex;
+                        seqItem.eventQuery = events[bestPivot.eventIndex]?.query || 'Unknown';
+                    } else {
+                        // For now, just use sequential mapping - this could be improved
+                        seqItem.eventIndex = idx < events.length ? idx : -1;
+                        seqItem.eventQuery = idx < events.length ? events[idx]?.query : 'Unknown';
+                    }
+                });
+
                 if (isSequenceValid(sequence, events)) {
-                    debugLog(`✅ Sequence is valid`, 'success');
+                    debugLog(`✅ Sequence with pivot frame ${candidate.keyframe_n} is valid`, 'success');
                     sequenceInfo.valid = true;
-                    sequenceInfo.reason = 'Valid sequence passed all checks';
+                    sequenceInfo.reason = 'Valid sequence passed all checks including pivot verification';
                     validSequences.push(sequence);
                 } else {
                     sequenceInfo.reason = 'Sequence failed validation checks';
-                    debugLog(`❌ Sequence failed validation`, 'warn');
+                    debugLog(`❌ Sequence with pivot frame ${candidate.keyframe_n} failed validation`, 'warn');
                 }
             } else {
                 sequenceInfo.reason = 'Failed to build sequence around pivot';
