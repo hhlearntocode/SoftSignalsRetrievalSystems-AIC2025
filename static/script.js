@@ -46,6 +46,13 @@ document.addEventListener('DOMContentLoaded', function() {
             checkAndInitializeTRAKEEvents();
         }, 50);
     });
+
+    // Initialize Video Aggregator events on first visit
+    document.getElementById('video-agg-tab')?.addEventListener('click', function() {
+        setTimeout(() => {
+            checkAndInitializeVideoAggregatorEvents();
+        }, 50);
+    });
 });
 
 // Load statistics and test backend connection
@@ -1032,6 +1039,207 @@ function checkAndInitializeTRAKEEvents() {
         console.log('Events container is empty, initializing with 3 default events');
         initializeTRAKEEvents();
     }
+}
+
+// ========== Top-k Video Aggregator UI ==========
+function checkAndInitializeVideoAggregatorEvents() {
+    const container = document.getElementById('videoAggEventsContainer');
+    if (container && container.children.length === 0) {
+        initializeVideoAggregatorEvents();
+    }
+}
+
+function initializeVideoAggregatorEvents() {
+    const container = document.getElementById('videoAggEventsContainer');
+    if (!container) return;
+    container.innerHTML = '';
+    // Default 2 rows
+    for (let i = 1; i <= 2; i++) addVideoEventRow();
+}
+
+let videoAggNextEventNumber = 1;
+function addVideoEventRow() {
+    const container = document.getElementById('videoAggEventsContainer');
+    if (!container) return;
+    const n = videoAggNextEventNumber++;
+    const row = document.createElement('div');
+    row.className = 'event-row';
+    row.id = `video-agg-event-${n}`;
+    const canRemove = container.children.length >= 2;
+    row.innerHTML = `
+        <div class="d-flex align-items-center mb-2">
+            <span class="event-number me-2">${n}</span>
+            <span class="fw-bold">Event ${n}</span>
+            ${canRemove ? `
+                <button class="btn btn-sm btn-outline-danger ms-auto" onclick="removeVideoEventRow(${n})">
+                    <i class="fas fa-times"></i>
+                </button>
+            ` : ''}
+        </div>
+        <div class="row g-2">
+            <div class="col-md-12">
+                <input type="text" class="form-control video-agg-event-query" id="videoAggEventQuery${n}" placeholder="Enter event ${n} description">
+            </div>
+        </div>
+    `;
+    container.appendChild(row);
+    updateVideoRemoveButtons();
+}
+
+function removeVideoEventRow(n) {
+    const row = document.getElementById(`video-agg-event-${n}`);
+    if (row) row.remove();
+    updateVideoRemoveButtons();
+}
+
+function updateVideoRemoveButtons() {
+    const container = document.getElementById('videoAggEventsContainer');
+    if (!container) return;
+    const rows = container.querySelectorAll('.event-row');
+    rows.forEach(r => {
+        const btn = r.querySelector('button.btn-outline-danger');
+        if (!btn) return;
+        if (rows.length <= 1) btn.style.display = 'none'; else btn.style.display = 'inline-block';
+    });
+}
+
+function getVideoAggregatorEventsData() {
+    const events = [];
+    const container = document.getElementById('videoAggEventsContainer');
+    if (!container) return events;
+    const queries = container.querySelectorAll('.video-agg-event-query');
+    queries.forEach((input, idx) => {
+        const q = input.value.trim();
+        if (q) events.push({ id: idx + 1, query: q });
+    });
+    return events;
+}
+
+// Main aggregation search
+async function performTopKVideoSearch() {
+    const events = getVideoAggregatorEventsData();
+    const topKVids = parseInt(document.getElementById('videoAggTopK').value);
+    const perQueryK = parseInt(document.getElementById('videoAggPerQueryK').value);
+    const videoFilter = document.getElementById('videoAggVideoFilter').value.trim();
+
+    if (events.length === 0) {
+        showError('Vui lòng thêm ít nhất 1 sự kiện.');
+        return;
+    }
+
+    showLoading(true);
+    try {
+        // Aggregation map: video_id -> { score, hits, frames: [], meta }
+        const videoScores = new Map();
+        const discount = (rank) => 1 / Math.log2(rank + 2); // DCG-like discount
+
+        for (const ev of events) {
+            const params = new URLSearchParams({ query: ev.query, top_k: perQueryK });
+            if (videoFilter) params.append('video_id', videoFilter);
+            const res = await fetch(`/search/text?${params.toString()}`, { method: 'POST' });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || 'Search failed');
+
+            (data.results || []).forEach((r, idx) => {
+                const sim = typeof r.similarity === 'number' ? r.similarity : 0;
+                const gain = sim * discount(idx);
+                const key = r.video_id;
+                if (!videoScores.has(key)) {
+                    videoScores.set(key, { score: 0, hits: 0, frames: [], meta: {
+                        video_id: r.video_id,
+                        video_title: r.video_title,
+                        video_author: r.video_author,
+                        watch_url: r.watch_url,
+                        thumbnail_url: r.thumbnail_url
+                    }});
+                }
+                const entry = videoScores.get(key);
+                entry.score += gain;
+                entry.hits += 1;
+                // Keep a few representative frames
+                if (entry.frames.length < 3) entry.frames.push(r);
+            });
+        }
+
+        // Rank videos by aggregated score
+        const results = Array.from(videoScores.values())
+            .sort((a, b) => b.score - a.score)
+            .slice(0, topKVids);
+
+        displayVideoAggregationResults(results);
+    } catch (err) {
+        showError('Top-k Video aggregation failed: ' + err.message);
+        console.error(err);
+    } finally {
+        showLoading(false);
+    }
+}
+
+function displayVideoAggregationResults(videoResults) {
+    const resultsDiv = document.getElementById('searchResults');
+    if (!videoResults || videoResults.length === 0) {
+        resultsDiv.innerHTML = `
+            <div class="text-center text-muted py-5">
+                <i class="fas fa-list-ol fa-3x mb-3"></i>
+                <h4>Không tìm thấy video phù hợp</h4>
+                <p>Hãy thử thêm/bớt sự kiện hoặc tăng Per-query Depth.</p>
+            </div>
+        `;
+        return;
+    }
+
+    let html = `
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h4>Top-k Video (tổng hợp nhiều sự kiện)</h4>
+            <div class="text-muted">
+                <i class="fas fa-info-circle me-1"></i>
+                ${videoResults.length} videos
+            </div>
+        </div>
+        <div class="row g-4">
+    `;
+
+    videoResults.forEach((v, idx) => {
+        const rep = v.frames[0];
+        const imagePath = rep ? `/images/${rep.video_id}/${rep.image_filename}` : (v.meta.thumbnail_url || '');
+        const scorePct = (v.score * 100).toFixed(1);
+        const watchUrl = v.meta.watch_url || (rep ? rep.watch_url : '#');
+        const pts = rep ? rep.pts_time : 0;
+        html += `
+            <div class="col-md-6 col-lg-4 col-xl-3">
+                <div class="card result-card h-100">
+                    <div class="position-relative">
+                        ${imagePath ? `<img src="${imagePath}" class="card-img-top result-image" alt="Video cover">` : `<div class='p-5 text-center text-muted'>No image</div>`}
+                        <span class="similarity-badge">Score ${scorePct}</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="video-info">
+                            <div class="fw-bold text-truncate" title="${v.meta.video_title || ''}">
+                                ${v.meta.video_title || 'Untitled'}
+                            </div>
+                            <small class="text-muted">${v.meta.video_author || 'Unknown Author'}</small>
+                        </div>
+                        <div class="mt-2">
+                            <small class="text-muted">
+                                <i class="fas fa-video me-1"></i>${v.meta.video_id || (rep ? rep.video_id : '')}
+                            </small>
+                        </div>
+                        <div class="mt-2">
+                            <small class="text-muted"><i class="fas fa-bolt me-1"></i>${v.hits} hits</small>
+                        </div>
+                        <div class="mt-2">
+                            <a href="#" onclick="openYouTubeAtTimestamp('${watchUrl}', ${pts}); return false;" class="btn btn-sm btn-outline-danger w-100">
+                                <i class="fab fa-youtube me-1"></i>Watch
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+    });
+
+    html += '</div>';
+    resultsDiv.innerHTML = html;
 }
 
 // Initialize TRAKE events with default rows

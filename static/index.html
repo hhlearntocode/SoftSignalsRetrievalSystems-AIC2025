@@ -6,7 +6,7 @@
     <title>Image Retrieval System</title>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-    <link href="static/style.css" rel="stylesheet">
+    <link href="static/style.css?v=20250913" rel="stylesheet">
 </head>
 <body>
     <div class="container-fluid">
@@ -39,6 +39,11 @@
                     <li class="nav-item">
                         <button class="nav-link" id="trake-tab" data-bs-toggle="tab" data-bs-target="#trake-search">
                             <i class="fas fa-video me-2"></i>TRAKE Search
+                        </button>
+                    </li>
+                    <li class="nav-item">
+                        <button class="nav-link" id="video-agg-tab" data-bs-toggle="tab" data-bs-target="#video-agg-search">
+                            <i class="fas fa-list-ol me-2"></i>Top-k Video
                         </button>
                     </li>
                     <li class="nav-item">
@@ -248,6 +253,59 @@
                         </div>
                     </div>
 
+                    <!-- Top-k Video Aggregator -->
+                    <div class="tab-pane fade" id="video-agg-search">
+                        <div class="row g-3 mb-4">
+                            <div class="col-md-3">
+                                <label class="form-label">Top K Videos:</label>
+                                <select id="videoAggTopK" class="form-select">
+                                    <option value="5">Top 5</option>
+                                    <option value="10" selected>Top 10</option>
+                                    <option value="20">Top 20</option>
+                                </select>
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">Per-query Depth:</label>
+                                <select id="videoAggPerQueryK" class="form-select" title="How many frame results per event to consider">
+                                    <option value="10">Top 10 frames</option>
+                                    <option value="20" selected>Top 20 frames</option>
+                                    <option value="50">Top 50 frames</option>
+                                    <option value="100">Top 100 frames</option>
+                                </select>
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">Video Filter (optional):</label>
+                                <input type="text" id="videoAggVideoFilter" class="form-control" placeholder="video1,video2 (optional)">
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">&nbsp;</label>
+                                <button onclick="performTopKVideoSearch()" class="btn btn-primary w-100">
+                                    <i class="fas fa-magnifying-glass me-1"></i>Aggregate Search
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="mb-3">
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <h5>Event Queries</h5>
+                                <div class="btn-group">
+                                    <button class="btn btn-success btn-sm" onclick="addVideoEventRow()" id="videoAggAddEventButton">
+                                        <i class="fas fa-plus me-1"></i>Add Event
+                                    </button>
+                                    <button class="btn btn-secondary btn-sm" onclick="initializeVideoAggregatorEvents()" id="videoAggResetEventsButton">
+                                        <i class="fas fa-rotate me-1"></i>Reset
+                                    </button>
+                                </div>
+                            </div>
+                            <div id="videoAggEventsContainer"></div>
+                        </div>
+
+                        <div class="alert alert-info mt-2">
+                            <i class="fas fa-info-circle me-2"></i>
+                            Enter 1 or more event descriptions. Each event runs a normal text search; results are scored with rank-discounted, similarity-weighted points and summed per video to produce Top-k videos.
+                        </div>
+                    </div>
+
                     <!-- Debug Panel -->
                     <div class="tab-pane fade" id="debug-panel">
                         <!-- Debug Controls -->
@@ -442,6 +500,7 @@
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/js/bootstrap.bundle.min.js"></script>
-    <script src="static/script.js"></script>\n    <script src="static/script_addon.js"></script>
+    <script src="static/script.js?v=20250913"></script>
+    <script src="static/script_addon.js?v=20250913"></script>
 </body>
 </html>
