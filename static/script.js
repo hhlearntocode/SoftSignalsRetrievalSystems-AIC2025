@@ -1702,8 +1702,8 @@ function findBestMatchFromMatrix(sequence, eventIdx, candidateFrames, allFrames,
         return null;
     }
     
-    let bestMatch = null;
-    let bestSimilarity = 0;
+    // Create array of candidate frames with their similarities and sort by similarity (highest first)
+    const candidatesWithSimilarity = [];
     
     for (const candidateFrame of candidateFrames) {
         // Find the index of this candidate frame in the allFrames array
@@ -1714,29 +1714,48 @@ function findBestMatchFromMatrix(sequence, eventIdx, candidateFrames, allFrames,
         
         if (frameIdx >= 0 && frameIdx < similarityMatrix[eventIdx].length) {
             const similarity = similarityMatrix[eventIdx][frameIdx];
-            // Forward search ensures temporal order
-            if (direction) {
-                if (similarity > bestSimilarity && sequence[eventIdx - 1].frameNumber  < candidateFrame.keyframe_n) {
-                    bestSimilarity = similarity;
-                    bestMatch = {
-                        frame: candidateFrame,
-                        similarity: similarity
-                    };
-                }
-            }
-            else {                
-                if (similarity > bestSimilarity && sequence[eventIdx + 1].frameNumber > candidateFrame.keyframe_n) {
-                    bestSimilarity = similarity;
-                    bestMatch = {
-                        frame: candidateFrame,
-                        similarity: similarity
-                    };
-                }
-            }
+            candidatesWithSimilarity.push({
+                frame: candidateFrame,
+                similarity: similarity,
+                frameIdx: frameIdx
+            });
         }
     }
     
-    return bestMatch;
+    // Sort candidates by similarity (highest first)
+    candidatesWithSimilarity.sort((a, b) => b.similarity - a.similarity);
+    
+    // Try each candidate in order of similarity until we find one that maintains event order
+    for (const candidate of candidatesWithSimilarity) {
+        const candidateFrame = candidate.frame;
+        const similarity = candidate.similarity;
+        
+        // Check if this candidate maintains temporal order
+        let maintainsOrder = true;
+        
+        if (direction) {
+            // Forward search: check if this frame comes after the previous event's frame
+            if (sequence[eventIdx - 1] && sequence[eventIdx - 1].frameNumber >= candidateFrame.keyframe_n) {
+                maintainsOrder = false;
+            }
+        } else {
+            // Backward search: check if this frame comes before the next event's frame  
+            if (sequence[eventIdx + 1] && sequence[eventIdx + 1].frameNumber <= candidateFrame.keyframe_n) {
+                maintainsOrder = false;
+            }
+        }
+        
+        // If this candidate maintains temporal order, use it
+        if (maintainsOrder) {
+            return {
+                frame: candidateFrame,
+                similarity: similarity
+            };
+        }
+    }
+    
+    // No candidate maintains temporal order
+    return null;
 }
 
 // Check if sequence is valid according to algorithm requirements (using frame numbers)
