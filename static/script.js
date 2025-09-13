@@ -1437,32 +1437,25 @@ async function buildSequenceAroundPivot(pivotFrame, pivotEventIndex, events) {
         isPivot: true
     };
     
-    // Define search window around pivot using frame numbers
-    const searchWindow = algorithmConfig.searchWindow;
-    const minFrameNumber = Math.max(1, pivotFrameNumber - searchWindow);
-    const maxFrameNumber = pivotFrameNumber + searchWindow;
     console.log(`Building sequence around pivot frame number ${pivotFrameNumber} (Event ${pivotEventIndex + 1})`);
-    console.log(`Searching frames in range [${minFrameNumber}, ${maxFrameNumber}]`);
-    // Get all frames in the video within the search window for matrix computation
-    const videoFrames = await getVideoFramesInRange(
-        pivotFrame.video_id, 
-        minFrameNumber, 
-        maxFrameNumber
-    );
+    console.log(`Searching entire video for optimal event matches`);
+    
+    // Get ALL frames in the video (not just windowed search) for accurate similarity comparison
+    // This ensures we find the best matches just like manual text search does
+    const videoFrames = await getAllVideoFrames(pivotFrame.video_id);
     
     if (!videoFrames || videoFrames.length === 0) {
-        console.warn('No video frames found in range');
+        console.warn('No video frames found');
         return sequence.filter(frame => frame !== null);
     }
     
-    // Compute similarity matrix for all events with all frames in range
+    // Compute similarity matrix for all events with ALL frames in video (like text search)
     const similarityMatrix = await computeEventFrameSimilarityMatrix(events, videoFrames);
     
-    // Search backwards for earlier events using matrix results
+    // Search backwards for earlier events - consider ALL frames before pivot
     for (let eventIdx = pivotEventIndex - 1; eventIdx >= 0; eventIdx--) {
         const candidateFrames = videoFrames.filter(frame => 
-            frame.keyframe_n >= minFrameNumber && 
-            frame.keyframe_n < pivotFrameNumber
+            frame.keyframe_n < pivotFrameNumber  // Only temporal constraint: before pivot
         );
         
         const bestMatch = findBestMatchFromMatrix(
@@ -1485,11 +1478,10 @@ async function buildSequenceAroundPivot(pivotFrame, pivotEventIndex, events) {
         }
     }
     
-    // Search forwards for later events using matrix results
+    // Search forwards for later events - consider ALL frames after pivot
     for (let eventIdx = pivotEventIndex + 1; eventIdx < events.length; eventIdx++) {
         const candidateFrames = videoFrames.filter(frame => 
-            frame.keyframe_n > pivotFrameNumber && 
-            frame.keyframe_n <= maxFrameNumber
+            frame.keyframe_n > pivotFrameNumber  // Only temporal constraint: after pivot
         );
         
         const bestMatch = findBestMatchFromMatrix(
@@ -1514,6 +1506,23 @@ async function buildSequenceAroundPivot(pivotFrame, pivotEventIndex, events) {
     
     // Return only non-null frames
     return sequence.filter(frame => frame !== null);
+}
+
+// Get ALL frames from a video (for complete search like text search)
+async function getAllVideoFrames(videoId) {
+    try {
+        const response = await fetch(`/video/${videoId}/frames`);
+        const frames = await response.json();
+        
+        if (!response.ok || !frames) {
+            return [];
+        }
+        
+        return frames;
+    } catch (error) {
+        console.error('Error getting all video frames:', error);
+        return [];
+    }
 }
 
 // Get video frames within a specific frame number range (optimized)
